@@ -162,6 +162,154 @@ pub(in crate::ui) fn build_obs_settings_section(
     enabled_changed
 }
 
+pub(in crate::ui) fn build_play_overlay_settings_section(
+    ui: &mut egui::Ui,
+    profile: &mut ProfileConfig,
+) -> bool {
+    let config = &mut profile.play_overlay;
+    let mut changed = false;
+    egui::CollapsingHeader::new("プレー分析データ送信").id_salt("settings_play_overlay").show(
+        ui,
+        |ui| {
+            changed |=
+                ui.checkbox(&mut config.websocket_enabled, "HTMLへのデータ送信を有効化").changed();
+            ui.horizontal(|ui| {
+                ui.label("WebSocket URL");
+                ui.monospace(format!("ws://127.0.0.1:{}", config.websocket_port));
+            });
+            ui.horizontal(|ui| {
+                ui.label("ポート");
+                changed |= ui
+                    .add(egui::DragValue::new(&mut config.websocket_port).range(1..=65535))
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("集計期間");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut config.release_window_ms)
+                            .range(100..=60000)
+                            .suffix(" ms"),
+                    )
+                    .changed();
+                ui.label("LN扱いする長さ");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut config.release_ignore_threshold_ms)
+                            .range(0..=5000)
+                            .suffix(" ms"),
+                    )
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("release-OK");
+                let ok_changed = ui
+                    .add(
+                        egui::DragValue::new(&mut config.release_ok_threshold_ms)
+                            .range(0..=5000)
+                            .suffix(" ms"),
+                    )
+                    .changed();
+                ui.label("release-NG");
+                let ng_changed = ui
+                    .add(
+                        egui::DragValue::new(&mut config.release_ng_threshold_ms)
+                            .range(0..=5000)
+                            .suffix(" ms"),
+                    )
+                    .changed();
+                if ok_changed && config.release_ok_threshold_ms > config.release_ng_threshold_ms {
+                    config.release_ok_threshold_ms = config.release_ng_threshold_ms;
+                }
+                if ng_changed && config.release_ng_threshold_ms < config.release_ok_threshold_ms {
+                    config.release_ng_threshold_ms = config.release_ok_threshold_ms;
+                }
+                changed |= ok_changed || ng_changed;
+            });
+            ui.horizontal(|ui| {
+                ui.label("動作モード");
+                egui::ComboBox::from_id_salt("settings_play_overlay_controller_mode")
+                    .selected_text(play_overlay_controller_mode_label(config.controller_mode))
+                    .show_ui(ui, |ui| {
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.controller_mode,
+                                PlayOverlayControllerModeConfig::Key7P1,
+                                "7K (1P)",
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.controller_mode,
+                                PlayOverlayControllerModeConfig::Key7P2,
+                                "7K (2P)",
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.controller_mode,
+                                PlayOverlayControllerModeConfig::Key14,
+                                "14K",
+                            )
+                            .changed();
+                    });
+            });
+            ui.horizontal(|ui| {
+                ui.label("表示内容");
+                egui::ComboBox::from_id_salt("settings_play_overlay_release_display_mode")
+                    .selected_text(play_overlay_release_display_mode_label(
+                        config.release_display_mode,
+                    ))
+                    .show_ui(ui, |ui| {
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.release_display_mode,
+                                PlayOverlayReleaseDisplayModeConfig::ReleaseOnly,
+                                "リリース値のみ",
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.release_display_mode,
+                                PlayOverlayReleaseDisplayModeConfig::ReleaseAndNotes,
+                                "リリース値 + 合計打鍵数",
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.release_display_mode,
+                                PlayOverlayReleaseDisplayModeConfig::NotesOnly,
+                                "合計打鍵数のみ",
+                            )
+                            .changed();
+                    });
+            });
+            ui.small(
+                "表示プレビューはHTML側で行います。本体側ではプレー中のegui更新を増やしません。",
+            );
+        },
+    );
+    changed
+}
+
+fn play_overlay_controller_mode_label(mode: PlayOverlayControllerModeConfig) -> &'static str {
+    match mode {
+        PlayOverlayControllerModeConfig::Key7P1 => "7K (1P)",
+        PlayOverlayControllerModeConfig::Key7P2 => "7K (2P)",
+        PlayOverlayControllerModeConfig::Key14 => "14K",
+    }
+}
+
+fn play_overlay_release_display_mode_label(
+    mode: PlayOverlayReleaseDisplayModeConfig,
+) -> &'static str {
+    match mode {
+        PlayOverlayReleaseDisplayModeConfig::ReleaseOnly => "リリース値のみ",
+        PlayOverlayReleaseDisplayModeConfig::ReleaseAndNotes => "リリース値 + 合計打鍵数",
+        PlayOverlayReleaseDisplayModeConfig::NotesOnly => "合計打鍵数のみ",
+    }
+}
+
 pub(in crate::ui) fn obs_connection_status_label(
     kind: crate::obs::ObsConnectionStatusKind,
     text: Localizer,

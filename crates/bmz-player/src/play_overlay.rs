@@ -16,7 +16,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::config::play_input::lane_binding_for_key_mode;
 use crate::config::profile_config::{
-    PlayAnalysisConfig, PlayAnalysisControllerModeConfig, PlayAnalysisReleaseDisplayModeConfig,
+    PlayOverlayConfig, PlayOverlayControllerModeConfig, PlayOverlayReleaseDisplayModeConfig,
     ProfileInputConfig,
 };
 
@@ -26,8 +26,8 @@ pub struct PlayOverlayServerConfig {
     pub port: u16,
 }
 
-impl From<&PlayAnalysisConfig> for PlayOverlayServerConfig {
-    fn from(config: &PlayAnalysisConfig) -> Self {
+impl From<&PlayOverlayConfig> for PlayOverlayServerConfig {
+    fn from(config: &PlayOverlayConfig) -> Self {
         Self { enabled: config.websocket_enabled, port: config.websocket_port }
     }
 }
@@ -148,7 +148,7 @@ pub struct PlayOverlayState {
 impl PlayOverlayState {
     pub fn build_payload(
         &mut self,
-        config: &PlayAnalysisConfig,
+        config: &PlayOverlayConfig,
         input_config: &ProfileInputConfig,
         scene: &AppSceneSnapshot,
         pressed_play_inputs: &[(DeviceId, PhysicalControl)],
@@ -180,7 +180,7 @@ impl PlayOverlayState {
 
     fn observe_inputs(
         &mut self,
-        config: &PlayAnalysisConfig,
+        config: &PlayOverlayConfig,
         input_config: &ProfileInputConfig,
         pressed_play_inputs: &[(DeviceId, PhysicalControl)],
     ) -> ActiveOverlayInputs {
@@ -371,7 +371,7 @@ struct ActiveOverlayInputs {
 
 fn resolve_active_inputs(
     input_config: &ProfileInputConfig,
-    mode: PlayAnalysisControllerModeConfig,
+    mode: PlayOverlayControllerModeConfig,
     pressed_play_inputs: &[(DeviceId, PhysicalControl)],
 ) -> ActiveOverlayInputs {
     let mut active = ActiveOverlayInputs::default();
@@ -401,18 +401,18 @@ fn resolve_active_inputs(
     active
 }
 
-fn controller_binding_key_modes(mode: PlayAnalysisControllerModeConfig) -> &'static [KeyMode] {
+fn controller_binding_key_modes(mode: PlayOverlayControllerModeConfig) -> &'static [KeyMode] {
     match mode {
-        PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2 => {
+        PlayOverlayControllerModeConfig::Key7P1 | PlayOverlayControllerModeConfig::Key7P2 => {
             &[KeyMode::K7, KeyMode::K14]
         }
-        PlayAnalysisControllerModeConfig::Key14 => &[KeyMode::K14],
+        PlayOverlayControllerModeConfig::Key14 => &[KeyMode::K14],
     }
 }
 
-fn controller_display_lane(mode: PlayAnalysisControllerModeConfig, lane: Lane) -> Option<Lane> {
+fn controller_display_lane(mode: PlayOverlayControllerModeConfig, lane: Lane) -> Option<Lane> {
     match mode {
-        PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2 => {
+        PlayOverlayControllerModeConfig::Key7P1 | PlayOverlayControllerModeConfig::Key7P2 => {
             Some(match lane {
                 Lane::Scratch | Lane::Scratch2 => Lane::Scratch,
                 Lane::Key1 | Lane::Key8 => Lane::Key1,
@@ -424,15 +424,15 @@ fn controller_display_lane(mode: PlayAnalysisControllerModeConfig, lane: Lane) -
                 Lane::Key7 | Lane::Key14 => Lane::Key7,
             })
         }
-        PlayAnalysisControllerModeConfig::Key14 => {
+        PlayOverlayControllerModeConfig::Key14 => {
             overlay_lanes(mode).contains(&lane).then_some(lane)
         }
     }
 }
 
-fn release_average_lane(mode: PlayAnalysisControllerModeConfig, lane: Lane) -> bool {
+fn release_average_lane(mode: PlayOverlayControllerModeConfig, lane: Lane) -> bool {
     match mode {
-        PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2 => {
+        PlayOverlayControllerModeConfig::Key7P1 | PlayOverlayControllerModeConfig::Key7P2 => {
             matches!(
                 lane,
                 Lane::Key1
@@ -444,7 +444,7 @@ fn release_average_lane(mode: PlayAnalysisControllerModeConfig, lane: Lane) -> b
                     | Lane::Key7
             )
         }
-        PlayAnalysisControllerModeConfig::Key14 => {
+        PlayOverlayControllerModeConfig::Key14 => {
             matches!(
                 lane,
                 Lane::Key1
@@ -466,9 +466,9 @@ fn release_average_lane(mode: PlayAnalysisControllerModeConfig, lane: Lane) -> b
     }
 }
 
-fn overlay_lanes(mode: PlayAnalysisControllerModeConfig) -> &'static [Lane] {
+fn overlay_lanes(mode: PlayOverlayControllerModeConfig) -> &'static [Lane] {
     match mode {
-        PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2 => &[
+        PlayOverlayControllerModeConfig::Key7P1 | PlayOverlayControllerModeConfig::Key7P2 => &[
             Lane::Scratch,
             Lane::Key1,
             Lane::Key2,
@@ -478,7 +478,7 @@ fn overlay_lanes(mode: PlayAnalysisControllerModeConfig) -> &'static [Lane] {
             Lane::Key6,
             Lane::Key7,
         ],
-        PlayAnalysisControllerModeConfig::Key14 => &[
+        PlayOverlayControllerModeConfig::Key14 => &[
             Lane::Scratch,
             Lane::Key1,
             Lane::Key2,
@@ -520,55 +520,55 @@ fn lane_id(lane: Lane) -> &'static str {
     }
 }
 
-fn lane_label(mode: PlayAnalysisControllerModeConfig, lane: Lane) -> &'static str {
+fn lane_label(mode: PlayOverlayControllerModeConfig, lane: Lane) -> &'static str {
     match (mode, lane) {
         (_, Lane::Scratch) => "SC",
         (_, Lane::Scratch2) => "SC2",
         (
-            PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2,
+            PlayOverlayControllerModeConfig::Key7P1 | PlayOverlayControllerModeConfig::Key7P2,
             Lane::Key1,
         ) => "1",
         (
-            PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2,
+            PlayOverlayControllerModeConfig::Key7P1 | PlayOverlayControllerModeConfig::Key7P2,
             Lane::Key2,
         ) => "2",
         (
-            PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2,
+            PlayOverlayControllerModeConfig::Key7P1 | PlayOverlayControllerModeConfig::Key7P2,
             Lane::Key3,
         ) => "3",
         (
-            PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2,
+            PlayOverlayControllerModeConfig::Key7P1 | PlayOverlayControllerModeConfig::Key7P2,
             Lane::Key4,
         ) => "4",
         (
-            PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2,
+            PlayOverlayControllerModeConfig::Key7P1 | PlayOverlayControllerModeConfig::Key7P2,
             Lane::Key5,
         ) => "5",
         (
-            PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2,
+            PlayOverlayControllerModeConfig::Key7P1 | PlayOverlayControllerModeConfig::Key7P2,
             Lane::Key6,
         ) => "6",
         (
-            PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2,
+            PlayOverlayControllerModeConfig::Key7P1 | PlayOverlayControllerModeConfig::Key7P2,
             Lane::Key7,
         ) => "7",
         _ => lane_id(lane).trim_start_matches("key"),
     }
 }
 
-fn controller_mode_label(mode: PlayAnalysisControllerModeConfig) -> &'static str {
+fn controller_mode_label(mode: PlayOverlayControllerModeConfig) -> &'static str {
     match mode {
-        PlayAnalysisControllerModeConfig::Key7P1 => "7K (1P)",
-        PlayAnalysisControllerModeConfig::Key7P2 => "7K (2P)",
-        PlayAnalysisControllerModeConfig::Key14 => "14K",
+        PlayOverlayControllerModeConfig::Key7P1 => "7K (1P)",
+        PlayOverlayControllerModeConfig::Key7P2 => "7K (2P)",
+        PlayOverlayControllerModeConfig::Key14 => "14K",
     }
 }
 
-fn release_display_mode_label(mode: PlayAnalysisReleaseDisplayModeConfig) -> &'static str {
+fn release_display_mode_label(mode: PlayOverlayReleaseDisplayModeConfig) -> &'static str {
     match mode {
-        PlayAnalysisReleaseDisplayModeConfig::ReleaseOnly => "release",
-        PlayAnalysisReleaseDisplayModeConfig::ReleaseAndNotes => "release-and-count",
-        PlayAnalysisReleaseDisplayModeConfig::NotesOnly => "count",
+        PlayOverlayReleaseDisplayModeConfig::ReleaseOnly => "release",
+        PlayOverlayReleaseDisplayModeConfig::ReleaseAndNotes => "release-and-count",
+        PlayOverlayReleaseDisplayModeConfig::NotesOnly => "count",
     }
 }
 

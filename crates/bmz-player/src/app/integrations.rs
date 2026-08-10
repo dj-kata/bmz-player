@@ -114,7 +114,7 @@ impl WinitApp {
 
     pub(super) fn sync_play_overlay_controller(&mut self) {
         let desired = crate::play_overlay::PlayOverlayServerConfig::from(
-            &self.boot.profile_config.play_analysis,
+            &self.boot.profile_config.play_overlay,
         );
         if self.integrations.applied_play_overlay_config == desired {
             return;

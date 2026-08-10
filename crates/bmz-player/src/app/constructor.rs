@@ -98,7 +98,7 @@ impl WinitApp {
         let applied_obs_config = boot.app_config.obs.clone();
         let obs_controller = crate::obs::ObsController::spawn(applied_obs_config.clone());
         let applied_play_overlay_config =
-            crate::play_overlay::PlayOverlayServerConfig::from(&boot.profile_config.play_analysis);
+            crate::play_overlay::PlayOverlayServerConfig::from(&boot.profile_config.play_overlay);
         let mut play_overlay_controller = crate::play_overlay::PlayOverlayController::default();
         play_overlay_controller.apply_config(applied_play_overlay_config);
 

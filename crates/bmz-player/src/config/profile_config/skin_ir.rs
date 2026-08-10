@@ -523,7 +523,7 @@ impl ProfileConfig {
             skin: SkinConfig::default(),
             select: SelectStateConfig::default(),
             statistics: StatisticsConfig::default(),
-            play_analysis: PlayAnalysisConfig::default(),
+            play_overlay: PlayOverlayConfig::default(),
         }
     }
 }

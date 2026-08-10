@@ -242,7 +242,6 @@ pub struct DebugInfo {
 /// `EguiLayer::run` の 1 フレーム入力。
 pub struct EguiRunContext<'a, 'practice> {
     pub info: &'a DebugInfo,
-    pub scene_snapshot: &'a bmz_render::scene::AppSceneSnapshot,
     pub app_config: &'a mut AppConfig,
     pub profile_config: &'a mut ProfileConfig,
     pub random_trainer: &'a mut RandomTrainerState,
@@ -260,12 +259,6 @@ pub struct EguiRunContext<'a, 'practice> {
     pub obs_connection_status: &'a crate::obs::ObsConnectionStatus,
     /// 現在の backend が認識しているゲームパッド一覧。未初期化時は空。
     pub connected_gamepads: &'a [crate::input::gamepad::ConnectedGamepad],
-    /// 現在押下中の物理入力名。コントローラ情報ビューの簡易診断に使う。
-    pub pressed_controls: &'a [String],
-    pub pressed_play_inputs: &'a [(
-        bmz_gameplay::input::backend::DeviceId,
-        bmz_gameplay::input::backend::PhysicalControl,
-    )],
 }
 
 /// `EguiLayer::run` の 1 フレーム出力。
@@ -334,9 +327,6 @@ pub struct EguiLayer {
     pub(super) show_debug: bool,
     /// 7K RANDOM 固定配置パネルの開閉状態。
     pub(super) show_random_trainer: bool,
-    /// プレー分析パネルの開閉状態。
-    pub(super) show_play_analysis: bool,
-    pub(super) play_analysis_state: PlayAnalysisPanelState,
     /// デバッグ表示内のログ最低表示レベル。
     #[allow(dead_code)]
     pub(super) debug_log_filter: DebugLogFilter,

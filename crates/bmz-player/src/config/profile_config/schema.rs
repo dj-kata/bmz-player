@@ -26,8 +26,8 @@ pub struct ProfileConfig {
     pub select: SelectStateConfig,
     #[serde(default)]
     pub statistics: StatisticsConfig,
-    #[serde(default, alias = "play_log")]
-    pub play_analysis: PlayAnalysisConfig,
+    #[serde(default)]
+    pub play_overlay: PlayOverlayConfig,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -38,97 +38,63 @@ pub struct StatisticsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlayAnalysisConfig {
-    #[serde(default)]
-    pub open_on_startup: bool,
-    #[serde(default)]
-    pub compact_mode: bool,
+pub struct PlayOverlayConfig {
     #[serde(default)]
     pub websocket_enabled: bool,
-    #[serde(default = "default_play_analysis_websocket_port")]
+    #[serde(default = "default_play_overlay_websocket_port")]
     pub websocket_port: u16,
-    #[serde(default, alias = "window_pos")]
-    pub full_window_pos: Option<[f32; 2]>,
-    #[serde(default)]
-    pub compact_window_pos: Option<[f32; 2]>,
-    #[serde(default)]
-    pub full_window_size: Option<[f32; 2]>,
-    #[serde(default = "default_true")]
-    pub current_section_open: bool,
-    #[serde(default = "default_true")]
-    pub tweet_section_open: bool,
-    #[serde(default = "default_true")]
-    pub notes_section_open: bool,
-    #[serde(default = "default_true")]
-    pub controller_section_open: bool,
-    #[serde(default = "default_true")]
-    pub history_section_open: bool,
-    #[serde(default = "default_play_analysis_release_ignore_threshold_ms")]
+    #[serde(default = "default_play_overlay_release_ignore_threshold_ms")]
     pub release_ignore_threshold_ms: u32,
-    #[serde(default = "default_play_analysis_release_window_ms")]
+    #[serde(default = "default_play_overlay_release_window_ms")]
     pub release_window_ms: u32,
-    #[serde(default = "default_play_analysis_release_ok_threshold_ms")]
+    #[serde(default = "default_play_overlay_release_ok_threshold_ms")]
     pub release_ok_threshold_ms: u32,
-    #[serde(default = "default_play_analysis_release_ng_threshold_ms")]
+    #[serde(default = "default_play_overlay_release_ng_threshold_ms")]
     pub release_ng_threshold_ms: u32,
     #[serde(default)]
-    pub release_display_mode: PlayAnalysisReleaseDisplayModeConfig,
+    pub release_display_mode: PlayOverlayReleaseDisplayModeConfig,
     #[serde(default)]
-    pub controller_mode: PlayAnalysisControllerModeConfig,
-    /// 旧ツイート機能の互換読み書き用。UI からは使用しない。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tweet_table_sources: Vec<String>,
+    pub controller_mode: PlayOverlayControllerModeConfig,
 }
 
-impl Default for PlayAnalysisConfig {
+impl Default for PlayOverlayConfig {
     fn default() -> Self {
         Self {
-            open_on_startup: false,
-            compact_mode: false,
             websocket_enabled: false,
-            websocket_port: default_play_analysis_websocket_port(),
-            full_window_pos: None,
-            compact_window_pos: None,
-            full_window_size: None,
-            current_section_open: true,
-            tweet_section_open: true,
-            notes_section_open: true,
-            controller_section_open: true,
-            history_section_open: true,
-            release_ignore_threshold_ms: default_play_analysis_release_ignore_threshold_ms(),
-            release_window_ms: default_play_analysis_release_window_ms(),
-            release_ok_threshold_ms: default_play_analysis_release_ok_threshold_ms(),
-            release_ng_threshold_ms: default_play_analysis_release_ng_threshold_ms(),
-            release_display_mode: PlayAnalysisReleaseDisplayModeConfig::default(),
-            controller_mode: PlayAnalysisControllerModeConfig::default(),
-            tweet_table_sources: Vec::new(),
+            websocket_port: default_play_overlay_websocket_port(),
+            release_ignore_threshold_ms: default_play_overlay_release_ignore_threshold_ms(),
+            release_window_ms: default_play_overlay_release_window_ms(),
+            release_ok_threshold_ms: default_play_overlay_release_ok_threshold_ms(),
+            release_ng_threshold_ms: default_play_overlay_release_ng_threshold_ms(),
+            release_display_mode: PlayOverlayReleaseDisplayModeConfig::default(),
+            controller_mode: PlayOverlayControllerModeConfig::default(),
         }
     }
 }
 
-pub fn default_play_analysis_websocket_port() -> u16 {
+pub fn default_play_overlay_websocket_port() -> u16 {
     29470
 }
 
-pub fn default_play_analysis_release_ignore_threshold_ms() -> u32 {
+pub fn default_play_overlay_release_ignore_threshold_ms() -> u32 {
     250
 }
 
-pub fn default_play_analysis_release_window_ms() -> u32 {
+pub fn default_play_overlay_release_window_ms() -> u32 {
     2_000
 }
 
-pub fn default_play_analysis_release_ok_threshold_ms() -> u32 {
+pub fn default_play_overlay_release_ok_threshold_ms() -> u32 {
     60
 }
 
-pub fn default_play_analysis_release_ng_threshold_ms() -> u32 {
+pub fn default_play_overlay_release_ng_threshold_ms() -> u32 {
     80
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-pub enum PlayAnalysisReleaseDisplayModeConfig {
+pub enum PlayOverlayReleaseDisplayModeConfig {
     #[default]
     ReleaseOnly,
     ReleaseAndNotes,
@@ -137,7 +103,7 @@ pub enum PlayAnalysisReleaseDisplayModeConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-pub enum PlayAnalysisControllerModeConfig {
+pub enum PlayOverlayControllerModeConfig {
     #[default]
     Key7P1,
     Key7P2,

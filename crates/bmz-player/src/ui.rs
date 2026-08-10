@@ -31,9 +31,10 @@ use crate::config::profile_config::{
     DoubleOptionConfig, FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig,
     HISPEED_STEP_MAX, HISPEED_STEP_MIN, HispeedModeConfig, HsFixConfig, IrConfig,
     IrCredentialStoreConfig, IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
-    JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RELEASE_BOUNCE_MS_MAX,
-    RandomOptionConfig, ReplaySlotRule, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig,
-    TargetOptionConfig, default_hispeed_step_fhs, default_hispeed_step_nhs, normalize_hispeed_step,
+    JudgeAlgorithmConfig, LaneEffectConfig, PlayOverlayControllerModeConfig,
+    PlayOverlayReleaseDisplayModeConfig, ProfileConfig, RELEASE_BOUNCE_MS_MAX, RandomOptionConfig,
+    ReplaySlotRule, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
+    default_hispeed_step_fhs, default_hispeed_step_nhs, normalize_hispeed_step,
     normalized_ir_base_url,
 };
 use crate::i18n::{AppLocale, FluentArgs, Localizer};
@@ -75,8 +76,6 @@ mod auxiliary_course;
 mod auxiliary_debug;
 #[path = "ui/auxiliary_panels/notice.rs"]
 mod auxiliary_notice;
-#[path = "ui/auxiliary_panels/play_analysis.rs"]
-mod auxiliary_play_analysis;
 #[path = "ui/auxiliary_panels/result_ir.rs"]
 mod auxiliary_result_ir;
 #[path = "ui/auxiliary_panels/update.rs"]
@@ -90,7 +89,6 @@ mod skin_panel;
 use auxiliary_course::*;
 use auxiliary_debug::*;
 use auxiliary_notice::*;
-use auxiliary_play_analysis::*;
 use auxiliary_result_ir::*;
 use auxiliary_update::*;
 use auxiliary_window::*;

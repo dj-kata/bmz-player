@@ -2,7 +2,6 @@
 pub(super) struct MenuPanelVisibility<'a> {
     pub(super) debug: &'a mut bool,
     pub(super) random_trainer: &'a mut bool,
-    pub(super) play_analysis: &'a mut bool,
     pub(super) settings: &'a mut bool,
     pub(super) profile_settings: &'a mut bool,
     pub(super) skin: &'a mut bool,
@@ -27,7 +26,6 @@ pub(super) fn build_menu(
             ui.separator();
             ui.checkbox(panels.debug, tr!(text, "menu-debug"));
             ui.checkbox(panels.random_trainer, tr!(text, "menu-random-trainer"));
-            ui.checkbox(panels.play_analysis, "プレー分析");
             ui.checkbox(panels.settings, tr!(text, "menu-app-settings"));
             ui.checkbox(panels.profile_settings, tr!(text, "menu-profile-settings"));
             ui.checkbox(panels.skin, tr!(text, "menu-skin-settings"));
