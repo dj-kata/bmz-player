@@ -51,6 +51,8 @@ pub struct PlayAnalysisConfig {
     pub release_ng_threshold_ms: u32,
     #[serde(default)]
     pub controller_mode: PlayAnalysisControllerModeConfig,
+    #[serde(default)]
+    pub tweet_table_sources: Vec<String>,
 }
 
 impl Default for PlayAnalysisConfig {
@@ -62,6 +64,7 @@ impl Default for PlayAnalysisConfig {
             release_ok_threshold_ms: default_play_analysis_release_ok_threshold_ms(),
             release_ng_threshold_ms: default_play_analysis_release_ng_threshold_ms(),
             controller_mode: PlayAnalysisControllerModeConfig::default(),
+            tweet_table_sources: Vec::new(),
         }
     }
 }

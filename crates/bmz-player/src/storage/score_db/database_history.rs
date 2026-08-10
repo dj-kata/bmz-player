@@ -92,4 +92,41 @@ impl ScoreDatabase {
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
+
+    pub fn local_history_since(&self, played_at: i64) -> Result<Vec<ScoreHistoryEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                id,
+                chart_sha256,
+                played_at,
+                clear_type,
+                gauge_type,
+                gauge_value,
+                total_notes,
+                ex_score,
+                bp,
+                cb,
+                max_combo,
+                autoplay,
+                replay_path,
+                course_score_id,
+                ln_policy,
+                old_clear_type,
+                old_ex_score,
+                old_max_combo,
+                old_bp,
+                old_cb,
+                device_type,
+                source_kind,
+                applied_double_option
+            FROM score_history
+            WHERE played_at >= ?1
+              AND source_kind = 'Local'
+              AND autoplay = 0
+              AND course_score_id IS NULL
+            ORDER BY played_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map(params![played_at], score_history_entry_from_row)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
 }

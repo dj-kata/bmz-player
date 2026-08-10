@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use bmz_core::clear::ClearType;
 use bmz_core::input::ScratchDirection;
 use bmz_core::lane::{KeyMode, Lane};
 use bmz_gameplay::input::backend::{DeviceId, PhysicalControl};
@@ -12,14 +13,31 @@ use crate::config::play_input::resolve_play_bindings;
 use crate::config::profile_config::{
     PlayAnalysisConfig, PlayAnalysisControllerModeConfig, ProfileInputConfig,
 };
+use crate::storage::difficulty_table_db::DifficultyTableRecord;
 
 use super::*;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct PlayAnalysisPanelState {
+    started_at: Instant,
+    started_at_unix: i64,
     selected_history_id: Option<i64>,
     pressed_since: HashMap<PhysicalInputKey, PressSampleStart>,
     release_samples: VecDeque<ReleaseSample>,
+    tweet_status: String,
+}
+
+impl Default for PlayAnalysisPanelState {
+    fn default() -> Self {
+        Self {
+            started_at: Instant::now(),
+            started_at_unix: unix_now(),
+            selected_history_id: None,
+            pressed_since: HashMap::new(),
+            release_samples: VecDeque::new(),
+            tweet_status: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -58,6 +76,7 @@ pub(super) struct PlayAnalysisPanelContext<'a> {
     pub(super) scene: &'a AppSceneSnapshot,
     pub(super) score_db: &'a crate::storage::score_db::ScoreDatabase,
     pub(super) library_db: &'a crate::storage::library_db::LibraryDatabase,
+    pub(super) difficulty_tables: &'a [DifficultyTableRecord],
     pub(super) input_config: &'a ProfileInputConfig,
     pub(super) connected_gamepads: &'a [crate::input::gamepad::ConnectedGamepad],
     pub(super) pressed_controls: &'a [String],
@@ -84,7 +103,7 @@ pub(super) fn build_play_analysis_panel(
         "プレー分析 (F7)".to_string(),
         ctx,
         visible,
-        1120.0,
+        520.0,
         760.0,
         egui::pos2(96.0, 48.0),
     )
@@ -97,6 +116,16 @@ pub(super) fn build_play_analysis_panel(
             egui::CollapsingHeader::new("現在の状態")
                 .default_open(true)
                 .show(ui, |ui| build_current_view(ui, panel.scene));
+            egui::CollapsingHeader::new("成果ツイート").default_open(true).show(ui, |ui| {
+                actions.save_profile |= build_tweet_view(
+                    ui,
+                    state,
+                    config,
+                    panel.score_db,
+                    panel.library_db,
+                    panel.difficulty_tables,
+                );
+            });
             egui::CollapsingHeader::new("ノーツ数")
                 .default_open(true)
                 .show(ui, |ui| build_notes_view(ui, panel.scene, panel.score_db));
@@ -118,6 +147,13 @@ pub(super) fn build_play_analysis_panel(
     });
 
     actions
+}
+
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or_default()
 }
 
 fn build_notes_view(
@@ -168,6 +204,233 @@ fn build_notes_view(
 
 fn note_aggregate_line(ui: &mut egui::Ui, row: &crate::storage::score_db::NoteCountAggregate) {
     ui.label(format!("{}  {:>8} notes  {} plays", row.label, row.total_notes, row.play_count));
+}
+
+fn build_tweet_view(
+    ui: &mut egui::Ui,
+    state: &mut PlayAnalysisPanelState,
+    config: &mut PlayAnalysisConfig,
+    score_db: &crate::storage::score_db::ScoreDatabase,
+    library_db: &crate::storage::library_db::LibraryDatabase,
+    difficulty_tables: &[DifficultyTableRecord],
+) -> bool {
+    let mut changed = false;
+    if config.tweet_table_sources.is_empty() && !difficulty_tables.is_empty() {
+        config.tweet_table_sources =
+            difficulty_tables.iter().map(|table| table.source_url.clone()).collect();
+        changed = true;
+    }
+
+    let tweet = build_achievement_tweet(state, config, score_db, library_db, difficulty_tables);
+    if ui.button("ツイート画面を開く").clicked() {
+        let url = format!("https://twitter.com/intent/tweet?text={}", percent_encode_query(&tweet));
+        state.tweet_status = match webbrowser::open(&url) {
+            Ok(_) => "ブラウザでツイート画面を開きました。".to_string(),
+            Err(error) => format!("ブラウザを開けませんでした: {error}"),
+        };
+    }
+    if !state.tweet_status.is_empty() {
+        ui.small(&state.tweet_status);
+    }
+
+    ui.label("集計対象の難易度表");
+    if difficulty_tables.is_empty() {
+        ui.small("読み込まれている難易度表がありません。");
+    } else {
+        for table in difficulty_tables {
+            let label = if table.name.trim().is_empty() {
+                table.source_url.as_str()
+            } else {
+                table.name.as_str()
+            };
+            let mut enabled = config.tweet_table_sources.contains(&table.source_url);
+            if ui.checkbox(&mut enabled, label).changed() {
+                if enabled {
+                    config.tweet_table_sources.push(table.source_url.clone());
+                } else {
+                    config.tweet_table_sources.retain(|source| source != &table.source_url);
+                }
+                changed = true;
+            }
+        }
+    }
+
+    ui.separator();
+    ui.label("ツイート文字列");
+    let mut preview = tweet;
+    ui.add(
+        egui::TextEdit::multiline(&mut preview)
+            .desired_rows(8)
+            .desired_width(f32::INFINITY)
+            .interactive(false),
+    );
+    changed
+}
+
+fn build_achievement_tweet(
+    state: &PlayAnalysisPanelState,
+    config: &PlayAnalysisConfig,
+    score_db: &crate::storage::score_db::ScoreDatabase,
+    library_db: &crate::storage::library_db::LibraryDatabase,
+    difficulty_tables: &[DifficultyTableRecord],
+) -> String {
+    let history = score_db.local_history_since(state.started_at_unix).unwrap_or_default();
+    let plays = history.len() as u64;
+    let notes = history.iter().map(|entry| u64::from(entry.total_notes)).sum::<u64>();
+    let ex_score = history.iter().map(|entry| u64::from(entry.ex_score)).sum::<u64>();
+    let rate = if notes > 0 { ex_score as f64 * 100.0 / (notes as f64 * 2.0) } else { 0.0 };
+    let uptime = state.started_at.elapsed();
+    let pace =
+        if uptime.as_secs() > 0 { notes as f64 * 3600.0 / uptime.as_secs_f64() } else { 0.0 };
+
+    let mut lines = vec![format!("plays:{plays}, notes: {}, {:.2}%", format_u64(notes), rate)];
+    if let Some(month) =
+        score_db.monthly_note_counts(1).ok().and_then(|rows| rows.into_iter().next())
+    {
+        lines.push(format!(
+            "({}: {})",
+            month.label.replace('-', "/"),
+            format_u64(month.total_notes)
+        ));
+    }
+    lines.push(format!(
+        "uptime: {}, pace: {}notes/h",
+        format_duration_hms(uptime.as_secs()),
+        format_u64(pace.round().max(0.0) as u64)
+    ));
+    lines.extend(lamp_update_lines(&history, config, library_db, difficulty_tables));
+    lines.push("#bmz_player".to_string());
+    lines.join("\n")
+}
+
+fn lamp_update_lines(
+    history: &[crate::storage::score_db::ScoreHistoryEntry],
+    config: &PlayAnalysisConfig,
+    library_db: &crate::storage::library_db::LibraryDatabase,
+    difficulty_tables: &[DifficultyTableRecord],
+) -> Vec<String> {
+    let enabled = config.tweet_table_sources.iter().cloned().collect::<HashSet<_>>();
+    let table_rank = difficulty_tables
+        .iter()
+        .enumerate()
+        .map(|(index, table)| (table.source_url.as_str(), index))
+        .collect::<HashMap<_, _>>();
+    let level_rank = difficulty_tables
+        .iter()
+        .map(|table| {
+            let ranks = table
+                .level_order
+                .iter()
+                .enumerate()
+                .map(|(index, level)| (level.as_str(), index))
+                .collect::<HashMap<_, _>>();
+            (table.source_url.as_str(), ranks)
+        })
+        .collect::<HashMap<_, _>>();
+    let mut counts = BTreeMap::<(usize, usize, String), BTreeMap<u8, (&'static str, u32)>>::new();
+
+    for entry in history {
+        let old_rank = entry
+            .previous_best
+            .as_ref()
+            .map(|best| ClearType::rank_from_label(&best.clear_type))
+            .unwrap_or(0);
+        let new_rank = ClearType::rank_from_label(&entry.clear_type);
+        if new_rank <= old_rank {
+            continue;
+        }
+        let Some(clear_label) = ClearType::from_label(&entry.clear_type).map(clear_tweet_label)
+        else {
+            continue;
+        };
+        let sha256 = crate::storage::common::hash_to_hex(&entry.chart_sha256);
+        let Ok(table_entries) =
+            library_db.list_difficulty_table_entries_by_sha256s(&[sha256.as_str()])
+        else {
+            continue;
+        };
+        let mut seen = HashSet::<(String, String)>::new();
+        for table_entry in table_entries {
+            if !enabled.contains(&table_entry.source_url) {
+                continue;
+            }
+            if !seen.insert((table_entry.source_url.clone(), table_entry.level.clone())) {
+                continue;
+            }
+            let source_rank =
+                table_rank.get(table_entry.source_url.as_str()).copied().unwrap_or(usize::MAX);
+            let level_rank = level_rank
+                .get(table_entry.source_url.as_str())
+                .and_then(|levels| levels.get(table_entry.level.as_str()))
+                .copied()
+                .unwrap_or(usize::MAX);
+            let label = format!("{}{}", table_entry.table_symbol, table_entry.level);
+            let entry = counts.entry((source_rank, level_rank, label)).or_default();
+            entry.entry(new_rank).and_modify(|(_, count)| *count += 1).or_insert((clear_label, 1));
+        }
+    }
+
+    counts
+        .into_iter()
+        .map(|((_, _, level), lamps)| {
+            let body = lamps
+                .into_iter()
+                .rev()
+                .map(|(_, (lamp, count))| format!("{lamp}+{count}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{level}: {body},")
+        })
+        .collect()
+}
+
+fn clear_tweet_label(clear: ClearType) -> &'static str {
+    match clear {
+        ClearType::NoPlay => "NP",
+        ClearType::Failed => "F",
+        ClearType::AssistEasy => "A",
+        ClearType::LightAssistEasy => "LA",
+        ClearType::Easy => "E",
+        ClearType::Normal => "C",
+        ClearType::Hard => "H",
+        ClearType::ExHard => "EXH",
+        ClearType::FullCombo => "FC",
+        ClearType::Perfect => "P",
+        ClearType::Max => "MAX",
+    }
+}
+
+fn format_u64(value: u64) -> String {
+    let text = value.to_string();
+    let mut out = String::with_capacity(text.len() + text.len() / 3);
+    for (index, ch) in text.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
+}
+
+fn format_duration_hms(seconds: u64) -> String {
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let seconds = seconds % 60;
+    format!("{hours}:{minutes:02}:{seconds:02}")
+}
+
+fn percent_encode_query(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            b' ' => out.push_str("%20"),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 fn build_current_view(ui: &mut egui::Ui, scene: &AppSceneSnapshot) {
@@ -475,10 +738,17 @@ impl PlayAnalysisPanelState {
             .map(|(device, control)| PhysicalInputKey { device: *device, control: control.clone() })
             .collect::<HashSet<_>>();
         for key in &pressed {
-            let resolved = active.by_input.get(key).copied().unwrap_or_default();
+            let Some(resolved) = active.by_input.get(key).copied() else {
+                continue;
+            };
+            let Some(lane) =
+                resolved.lane.filter(|lane| release_average_lane(config.controller_mode, *lane))
+            else {
+                continue;
+            };
             self.pressed_since
                 .entry(key.clone())
-                .or_insert(PressSampleStart { started_at: now, lane: resolved.lane });
+                .or_insert(PressSampleStart { started_at: now, lane: Some(lane) });
         }
         let released = self
             .pressed_since
@@ -828,6 +1098,52 @@ fn controller_mode_includes_lane(mode: PlayAnalysisControllerModeConfig, lane: L
                 | Lane::Key6
                 | Lane::Key7
                 | Lane::Scratch2
+                | Lane::Key8
+                | Lane::Key9
+                | Lane::Key10
+                | Lane::Key11
+                | Lane::Key12
+                | Lane::Key13
+                | Lane::Key14
+        ),
+    }
+}
+
+fn release_average_lane(mode: PlayAnalysisControllerModeConfig, lane: Lane) -> bool {
+    match mode {
+        PlayAnalysisControllerModeConfig::Key7P1 => {
+            matches!(
+                lane,
+                Lane::Key1
+                    | Lane::Key2
+                    | Lane::Key3
+                    | Lane::Key4
+                    | Lane::Key5
+                    | Lane::Key6
+                    | Lane::Key7
+            )
+        }
+        PlayAnalysisControllerModeConfig::Key7P2 => {
+            matches!(
+                lane,
+                Lane::Key8
+                    | Lane::Key9
+                    | Lane::Key10
+                    | Lane::Key11
+                    | Lane::Key12
+                    | Lane::Key13
+                    | Lane::Key14
+            )
+        }
+        PlayAnalysisControllerModeConfig::Key14 => matches!(
+            lane,
+            Lane::Key1
+                | Lane::Key2
+                | Lane::Key3
+                | Lane::Key4
+                | Lane::Key5
+                | Lane::Key6
+                | Lane::Key7
                 | Lane::Key8
                 | Lane::Key9
                 | Lane::Key10

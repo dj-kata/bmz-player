@@ -357,6 +357,7 @@ impl EguiLayer {
                     scene: scene_snapshot,
                     score_db,
                     library_db,
+                    difficulty_tables,
                     input_config: &profile_config.input,
                     connected_gamepads,
                     pressed_controls,
