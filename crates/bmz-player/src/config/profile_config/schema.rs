@@ -45,6 +45,10 @@ pub struct PlayAnalysisConfig {
     pub release_ignore_threshold_ms: u32,
     #[serde(default = "default_play_analysis_release_window_ms")]
     pub release_window_ms: u32,
+    #[serde(default = "default_play_analysis_release_ok_threshold_ms")]
+    pub release_ok_threshold_ms: u32,
+    #[serde(default = "default_play_analysis_release_ng_threshold_ms")]
+    pub release_ng_threshold_ms: u32,
     #[serde(default)]
     pub controller_mode: PlayAnalysisControllerModeConfig,
 }
@@ -55,6 +59,8 @@ impl Default for PlayAnalysisConfig {
             open_on_startup: false,
             release_ignore_threshold_ms: default_play_analysis_release_ignore_threshold_ms(),
             release_window_ms: default_play_analysis_release_window_ms(),
+            release_ok_threshold_ms: default_play_analysis_release_ok_threshold_ms(),
+            release_ng_threshold_ms: default_play_analysis_release_ng_threshold_ms(),
             controller_mode: PlayAnalysisControllerModeConfig::default(),
         }
     }
@@ -66,6 +72,14 @@ pub fn default_play_analysis_release_ignore_threshold_ms() -> u32 {
 
 pub fn default_play_analysis_release_window_ms() -> u32 {
     2_000
+}
+
+pub fn default_play_analysis_release_ok_threshold_ms() -> u32 {
+    80
+}
+
+pub fn default_play_analysis_release_ng_threshold_ms() -> u32 {
+    160
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

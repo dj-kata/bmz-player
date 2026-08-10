@@ -369,6 +369,10 @@ fn build_controller_view(
     pressed_play_inputs: &[(DeviceId, PhysicalControl)],
 ) -> bool {
     let mut changed = false;
+    if config.release_ok_threshold_ms > config.release_ng_threshold_ms {
+        config.release_ng_threshold_ms = config.release_ok_threshold_ms;
+        changed = true;
+    }
     ui.horizontal(|ui| {
         ui.label("LN無視しきい値");
         changed |= ui
@@ -386,6 +390,29 @@ fn build_controller_view(
                     .suffix(" ms"),
             )
             .changed();
+        ui.label("release-OK");
+        let ok_changed = ui
+            .add(
+                egui::DragValue::new(&mut config.release_ok_threshold_ms)
+                    .range(0..=5000)
+                    .suffix(" ms"),
+            )
+            .changed();
+        ui.label("release-NG");
+        let ng_changed = ui
+            .add(
+                egui::DragValue::new(&mut config.release_ng_threshold_ms)
+                    .range(0..=5000)
+                    .suffix(" ms"),
+            )
+            .changed();
+        if ok_changed && config.release_ok_threshold_ms > config.release_ng_threshold_ms {
+            config.release_ok_threshold_ms = config.release_ng_threshold_ms;
+        }
+        if ng_changed && config.release_ng_threshold_ms < config.release_ok_threshold_ms {
+            config.release_ng_threshold_ms = config.release_ok_threshold_ms;
+        }
+        changed |= ok_changed || ng_changed;
         egui::ComboBox::from_label("モード")
             .selected_text(controller_mode_label(config.controller_mode))
             .show_ui(ui, |ui| {
@@ -424,7 +451,7 @@ fn build_controller_view(
 
     let active = resolve_active_inputs(input_config, config.controller_mode, pressed_play_inputs);
     ui.separator();
-    build_controller_layout(ui, state, config.controller_mode, &active);
+    build_controller_layout(ui, state, config, &active);
 
     if !pressed_controls.is_empty() {
         ui.separator();
@@ -492,6 +519,13 @@ impl PlayAnalysisPanelState {
     }
 
     fn lane_average_label(&self, lane: Lane) -> String {
+        match self.lane_average_ms(lane) {
+            Some(value) => format!("{value:.0}ms"),
+            None => "-".to_string(),
+        }
+    }
+
+    fn lane_average_ms(&self, lane: Lane) -> Option<f32> {
         let samples = self
             .release_samples
             .iter()
@@ -499,10 +533,10 @@ impl PlayAnalysisPanelState {
             .map(|sample| sample.held_ms)
             .collect::<Vec<_>>();
         if samples.is_empty() {
-            return "-".to_string();
+            return None;
         }
         let sum = samples.iter().sum::<f32>();
-        format!("{:.0}ms", sum / samples.len() as f32)
+        Some(sum / samples.len() as f32)
     }
 }
 
@@ -581,66 +615,139 @@ fn scratch_direction_from_config(
 fn build_controller_layout(
     ui: &mut egui::Ui,
     state: &PlayAnalysisPanelState,
-    mode: PlayAnalysisControllerModeConfig,
+    config: &PlayAnalysisConfig,
     active: &ActiveControllerInputs,
 ) {
-    match mode {
+    match config.controller_mode {
         PlayAnalysisControllerModeConfig::Key7P1 => {
-            build_seven_key_controller(ui, state, Lane::Scratch, key_lanes_1p(), active);
+            build_seven_key_controller(
+                ui,
+                state,
+                config,
+                Lane::Scratch,
+                key_lanes_1p(),
+                ScratchPlacement::Left,
+                active,
+            );
         }
         PlayAnalysisControllerModeConfig::Key7P2 => {
-            build_seven_key_controller(ui, state, Lane::Scratch2, key_lanes_2p(), active);
+            build_seven_key_controller(
+                ui,
+                state,
+                config,
+                Lane::Scratch2,
+                key_lanes_2p(),
+                ScratchPlacement::Right,
+                active,
+            );
         }
         PlayAnalysisControllerModeConfig::Key14 => {
-            ui.horizontal(|ui| {
-                build_seven_key_controller(ui, state, Lane::Scratch, key_lanes_1p(), active);
+            ui.horizontal_top(|ui| {
+                build_seven_key_controller(
+                    ui,
+                    state,
+                    config,
+                    Lane::Scratch,
+                    key_lanes_1p(),
+                    ScratchPlacement::Left,
+                    active,
+                );
                 ui.separator();
-                build_seven_key_controller(ui, state, Lane::Scratch2, key_lanes_2p(), active);
+                build_seven_key_controller(
+                    ui,
+                    state,
+                    config,
+                    Lane::Scratch2,
+                    key_lanes_2p(),
+                    ScratchPlacement::Right,
+                    active,
+                );
             });
         }
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScratchPlacement {
+    Left,
+    Right,
+}
+
 fn build_seven_key_controller(
     ui: &mut egui::Ui,
     state: &PlayAnalysisPanelState,
+    config: &PlayAnalysisConfig,
     scratch: Lane,
     keys: [Lane; 7],
+    scratch_placement: ScratchPlacement,
     active: &ActiveControllerInputs,
 ) {
     ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.add_space(8.0);
-            let up = active.scratch_up.contains(&scratch);
-            let down = active.scratch_down.contains(&scratch);
-            let fill = if up || down {
-                egui::Color32::from_rgb(120, 30, 36)
-            } else {
-                egui::Color32::from_gray(32)
-            };
-            let label =
-                format!("SCR\n{} {}", if up { "UP" } else { "up" }, if down { "DN" } else { "dn" });
-            ui.add_sized([82.0, 92.0], egui::Button::new(label).fill(fill));
+        if scratch_placement == ScratchPlacement::Left {
+            build_scratch_button(ui, scratch, active);
+        }
+        build_key_button_grid(ui, state, config, keys, active);
+        if scratch_placement == ScratchPlacement::Right {
+            build_scratch_button(ui, scratch, active);
+        }
+    });
+}
+
+fn build_scratch_button(ui: &mut egui::Ui, scratch: Lane, active: &ActiveControllerInputs) {
+    ui.vertical(|ui| {
+        let up = active.scratch_up.contains(&scratch);
+        let down = active.scratch_down.contains(&scratch);
+        let fill = if up || down {
+            egui::Color32::from_rgb(120, 30, 36)
+        } else {
+            egui::Color32::from_gray(32)
+        };
+        let label =
+            format!("SCR\n{} {}", if up { "UP" } else { "up" }, if down { "DN" } else { "dn" });
+        ui.add_sized([82.0, 96.0], egui::Button::new(label).fill(fill));
+    });
+}
+
+fn build_key_button_grid(
+    ui: &mut egui::Ui,
+    state: &PlayAnalysisPanelState,
+    config: &PlayAnalysisConfig,
+    keys: [Lane; 7],
+    active: &ActiveControllerInputs,
+) {
+    ui.vertical(|ui| {
+        ui.horizontal(|ui| {
+            ui.add_space(28.0);
+            for lane in [keys[1], keys[3], keys[5]] {
+                build_controller_key_button(ui, state, config, lane, active);
+            }
         });
-        ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                ui.add_space(28.0);
-                for lane in [keys[1], keys[3], keys[5]] {
-                    build_controller_key_button(ui, state, lane, active);
-                }
-            });
-            ui.horizontal(|ui| {
-                for lane in [keys[0], keys[2], keys[4], keys[6]] {
-                    build_controller_key_button(ui, state, lane, active);
-                }
-            });
+        ui.horizontal(|ui| {
+            for lane in [keys[0], keys[2], keys[4], keys[6]] {
+                build_controller_key_button(ui, state, config, lane, active);
+            }
         });
     });
+}
+
+fn release_stroke(config: &PlayAnalysisConfig, average_ms: Option<f32>) -> egui::Stroke {
+    let Some(average_ms) = average_ms else {
+        return egui::Stroke::new(1.0_f32, egui::Color32::from_gray(60));
+    };
+    let color = if average_ms <= config.release_ok_threshold_ms as f32 {
+        egui::Color32::from_rgb(40, 190, 95)
+    } else if average_ms <= config.release_ng_threshold_ms as f32 {
+        egui::Color32::from_rgb(235, 200, 60)
+    } else {
+        egui::Color32::from_rgb(230, 70, 70)
+    };
+    egui::Stroke::new(4.0_f32, color)
 }
 
 fn build_controller_key_button(
     ui: &mut egui::Ui,
     state: &PlayAnalysisPanelState,
+    config: &PlayAnalysisConfig,
     lane: Lane,
     active: &ActiveControllerInputs,
 ) {
@@ -658,9 +765,10 @@ fn build_controller_key_button(
         egui::Color32::from_gray(25)
     };
     let label = format!("{}\n{}", number, state.lane_average_label(lane));
+    let stroke = release_stroke(config, state.lane_average_ms(lane));
     ui.add_sized(
         [52.0, 48.0],
-        egui::Button::new(egui::RichText::new(label).color(text_color)).fill(fill),
+        egui::Button::new(egui::RichText::new(label).color(text_color)).fill(fill).stroke(stroke),
     );
 }
 
