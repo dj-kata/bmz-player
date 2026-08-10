@@ -9,7 +9,12 @@ pub(super) struct AudioDevicePickerState {
 
 impl EguiLayer {
     /// `show_fps` は右上 FPS オーバーレイの初期表示状態。
-    pub fn new(window: &Window, show_fps: bool, font_search_paths: Vec<PathBuf>) -> Self {
+    pub fn new(
+        window: &Window,
+        show_fps: bool,
+        show_play_analysis: bool,
+        font_search_paths: Vec<PathBuf>,
+    ) -> Self {
         let ctx = egui::Context::default();
         let font_coverage = bmz_render::FontCoverage::Japanese;
         install_cjk_fonts(&ctx, font_coverage, &font_search_paths);
@@ -29,6 +34,8 @@ impl EguiLayer {
             visible: false,
             show_debug: false,
             show_random_trainer: false,
+            show_play_analysis,
+            play_analysis_state: PlayAnalysisPanelState::default(),
             debug_log_filter: DebugLogFilter::default(),
             debug_log_autoscroll: true,
             show_fps,
@@ -63,6 +70,11 @@ impl EguiLayer {
         tracing::info!(visible = self.visible, "egui menu toggled");
     }
 
+    pub fn toggle_play_analysis(&mut self) {
+        self.show_play_analysis = !self.show_play_analysis;
+        tracing::info!(visible = self.show_play_analysis, "egui play analysis toggled");
+    }
+
     /// 選曲画面の「詳細設定」から egui メニューと本体設定パネルを開く。
     pub fn open_advanced_settings(&mut self) {
         self.visible = true;
@@ -95,7 +107,7 @@ impl EguiLayer {
     }
 
     pub fn blocks_game_input(&self, practice_overlay: bool) -> bool {
-        self.visible || practice_overlay || self.update_dialog_active
+        self.visible || self.show_play_analysis || practice_overlay || self.update_dialog_active
     }
 
     /// 設定 metadata や profile 差分検出を含む完全な egui frame が必要かを返す。
@@ -110,6 +122,7 @@ impl EguiLayer {
     ) -> bool {
         egui_frame_needs_full_state(
             self.visible,
+            self.show_play_analysis,
             practice_overlay,
             has_update_dialog,
             scene,
@@ -147,6 +160,9 @@ impl EguiLayer {
         let EguiRunContext {
             info,
             log_buffer,
+            scene_snapshot,
+            score_db,
+            library_db,
             app_config,
             profile_config,
             random_trainer,
@@ -162,6 +178,8 @@ impl EguiLayer {
             update_dialog,
             obs_connection_status,
             connected_gamepads,
+            pressed_controls,
+            pressed_play_inputs,
         } = context;
         let font_coverage = profile_config.ui.locale().font_coverage();
         if font_coverage != self.font_coverage {
@@ -173,6 +191,7 @@ impl EguiLayer {
         let ctx = self.ctx.clone();
         let show_debug = &mut self.show_debug;
         let show_random_trainer = &mut self.show_random_trainer;
+        let show_play_analysis = &mut self.show_play_analysis;
         let show_settings = &mut self.show_settings;
         let show_profile_settings = &mut self.show_profile_settings;
         let show_skin = &mut self.show_skin;
@@ -233,6 +252,7 @@ impl EguiLayer {
                     MenuPanelVisibility {
                         debug: show_debug,
                         random_trainer: show_random_trainer,
+                        play_analysis: show_play_analysis,
                         settings: show_settings,
                         profile_settings: show_profile_settings,
                         skin: show_skin,
@@ -328,6 +348,23 @@ impl EguiLayer {
                 reset_skin_config |= skin_actions.reset;
                 skin_reload_request.union(skin_actions.reload);
             }
+            let play_analysis_actions = build_play_analysis_panel(
+                ui.ctx(),
+                show_play_analysis,
+                &mut self.play_analysis_state,
+                &mut profile_config.play_analysis,
+                PlayAnalysisPanelContext {
+                    scene: scene_snapshot,
+                    score_db,
+                    library_db,
+                    input_config: &profile_config.input,
+                    connected_gamepads,
+                    pressed_controls,
+                    pressed_play_inputs,
+                },
+                text,
+            );
+            save_profile_config |= play_analysis_actions.save_profile;
         });
         self.state.handle_platform_output(window, full_output.platform_output);
         let primitives = self.ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
@@ -357,12 +394,16 @@ impl EguiLayer {
 
 pub(super) fn egui_frame_needs_full_state(
     visible: bool,
+    show_play_analysis: bool,
     practice_overlay: bool,
     has_update_dialog: bool,
     scene: &str,
     show_settings: bool,
 ) -> bool {
-    visible || practice_overlay || (has_update_dialog && (scene == "Select" || show_settings))
+    visible
+        || show_play_analysis
+        || practice_overlay
+        || (has_update_dialog && (scene == "Select" || show_settings))
 }
 
 /// egui のデフォルトフォントは CJK グリフを含まないため、locale の地域別字形を

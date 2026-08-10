@@ -67,6 +67,15 @@ impl ApplicationHandler<AppUserEvent> for WinitApp {
                     }
                     return;
                 }
+                if event.physical_key == PhysicalKey::Code(KeyCode::F7)
+                    && event.state == ElementState::Pressed
+                    && !event.repeat
+                {
+                    if let Some(egui) = self.ui.egui.as_mut() {
+                        egui.toggle_play_analysis();
+                    }
+                    return;
+                }
                 if event.physical_key == PhysicalKey::Code(KeyCode::F12)
                     && event.state == ElementState::Pressed
                     && !event.repeat

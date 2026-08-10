@@ -240,6 +240,7 @@ impl WinitApp {
                 self.ui.egui = Some(EguiLayer::new(
                     &window,
                     self.boot.profile_config.ui.show_fps,
+                    self.boot.profile_config.play_analysis.open_on_startup,
                     vec![self.boot.app_paths.bundled_noto_cjk_font_root()],
                 ));
                 self.window = Some(window);

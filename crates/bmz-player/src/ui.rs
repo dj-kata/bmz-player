@@ -75,6 +75,8 @@ mod auxiliary_course;
 mod auxiliary_debug;
 #[path = "ui/auxiliary_panels/notice.rs"]
 mod auxiliary_notice;
+#[path = "ui/auxiliary_panels/play_analysis.rs"]
+mod auxiliary_play_analysis;
 #[path = "ui/auxiliary_panels/result_ir.rs"]
 mod auxiliary_result_ir;
 #[path = "ui/auxiliary_panels/update.rs"]
@@ -88,6 +90,7 @@ mod skin_panel;
 use auxiliary_course::*;
 use auxiliary_debug::*;
 use auxiliary_notice::*;
+use auxiliary_play_analysis::*;
 use auxiliary_result_ir::*;
 use auxiliary_update::*;
 use auxiliary_window::*;

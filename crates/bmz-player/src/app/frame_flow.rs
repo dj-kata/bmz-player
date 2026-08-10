@@ -120,6 +120,7 @@ impl WinitApp {
         }
         let info = self.egui_debug_info(&window, scene);
         let skin_meta = self.egui_skin_meta();
+        let scene_snapshot = self.scene_snapshot();
 
         // コース graph は egui を Option から取り出した後、clone せず参照で渡す。
         let course_result = self.result.finished_course.as_ref();
@@ -137,6 +138,10 @@ impl WinitApp {
             .unwrap_or_else(crate::obs::ObsConnectionStatus::disabled);
         let connected_gamepads =
             self.gamepad.as_ref().map(|gamepad| gamepad.connected_gamepads()).unwrap_or_default();
+        let mut pressed_controls = self.input.pressed_controls.iter().cloned().collect::<Vec<_>>();
+        pressed_controls.sort();
+        let pressed_play_inputs =
+            self.input.pressed_play_inputs.iter().cloned().collect::<Vec<_>>();
         let Some(mut egui) = self.ui.egui.take() else {
             return;
         };
@@ -151,6 +156,9 @@ impl WinitApp {
             &window,
             EguiRunContext {
                 info: &info,
+                scene_snapshot: &scene_snapshot,
+                score_db: &self.boot.score_db,
+                library_db: &self.boot.library_db,
                 app_config: &mut self.boot.app_config,
                 profile_config: &mut self.boot.profile_config,
                 random_trainer: &mut self.select.random_trainer,
@@ -167,6 +175,8 @@ impl WinitApp {
                 update_dialog,
                 obs_connection_status: &obs_connection_status,
                 connected_gamepads: &connected_gamepads,
+                pressed_controls: &pressed_controls,
+                pressed_play_inputs: &pressed_play_inputs,
             },
         );
         self.ui.egui = Some(egui);

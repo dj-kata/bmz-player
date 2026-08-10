@@ -26,6 +26,8 @@ pub struct ProfileConfig {
     pub select: SelectStateConfig,
     #[serde(default)]
     pub statistics: StatisticsConfig,
+    #[serde(default, alias = "play_log")]
+    pub play_analysis: PlayAnalysisConfig,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -33,6 +35,46 @@ pub struct StatisticsConfig {
     /// Local hour at which BMZ starts a new statistics day (0..=23).
     #[serde(default)]
     pub day_start_hour: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayAnalysisConfig {
+    #[serde(default)]
+    pub open_on_startup: bool,
+    #[serde(default = "default_play_analysis_release_ignore_threshold_ms")]
+    pub release_ignore_threshold_ms: u32,
+    #[serde(default = "default_play_analysis_release_window_ms")]
+    pub release_window_ms: u32,
+    #[serde(default)]
+    pub controller_mode: PlayAnalysisControllerModeConfig,
+}
+
+impl Default for PlayAnalysisConfig {
+    fn default() -> Self {
+        Self {
+            open_on_startup: false,
+            release_ignore_threshold_ms: default_play_analysis_release_ignore_threshold_ms(),
+            release_window_ms: default_play_analysis_release_window_ms(),
+            controller_mode: PlayAnalysisControllerModeConfig::default(),
+        }
+    }
+}
+
+pub fn default_play_analysis_release_ignore_threshold_ms() -> u32 {
+    250
+}
+
+pub fn default_play_analysis_release_window_ms() -> u32 {
+    2_000
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum PlayAnalysisControllerModeConfig {
+    #[default]
+    Key7P1,
+    Key7P2,
+    Key14,
 }
 
 /// 選曲画面の表示状態。フィルター (5K/7K など) とソートを永続化する。

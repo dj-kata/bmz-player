@@ -149,15 +149,16 @@ fn decide_and_play_restrict_settings_panels() {
 
 #[test]
 fn hidden_egui_uses_idle_frame_on_every_scene_until_an_overlay_needs_full_state() {
-    assert!(!egui_frame_needs_full_state(false, false, false, "Select", false));
-    assert!(!egui_frame_needs_full_state(false, false, false, "Decide", false));
-    assert!(!egui_frame_needs_full_state(false, false, false, "Play", false));
-    assert!(!egui_frame_needs_full_state(false, false, false, "Result", false));
-    assert!(egui_frame_needs_full_state(true, false, false, "Play", false));
-    assert!(egui_frame_needs_full_state(false, true, false, "Play", false));
-    assert!(egui_frame_needs_full_state(false, false, true, "Select", false));
-    assert!(egui_frame_needs_full_state(false, false, true, "Play", true));
-    assert!(!egui_frame_needs_full_state(false, false, true, "Play", false));
+    assert!(!egui_frame_needs_full_state(false, false, false, false, "Select", false));
+    assert!(!egui_frame_needs_full_state(false, false, false, false, "Decide", false));
+    assert!(!egui_frame_needs_full_state(false, false, false, false, "Play", false));
+    assert!(!egui_frame_needs_full_state(false, false, false, false, "Result", false));
+    assert!(egui_frame_needs_full_state(true, false, false, false, "Play", false));
+    assert!(egui_frame_needs_full_state(false, true, false, false, "Play", false));
+    assert!(egui_frame_needs_full_state(false, false, true, false, "Play", false));
+    assert!(egui_frame_needs_full_state(false, false, false, true, "Select", false));
+    assert!(egui_frame_needs_full_state(false, false, false, true, "Play", true));
+    assert!(!egui_frame_needs_full_state(false, false, false, true, "Play", false));
 }
 
 #[test]
