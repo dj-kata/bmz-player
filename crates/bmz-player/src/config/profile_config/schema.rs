@@ -41,6 +41,8 @@ pub struct StatisticsConfig {
 pub struct PlayAnalysisConfig {
     #[serde(default)]
     pub open_on_startup: bool,
+    #[serde(default)]
+    pub compact_mode: bool,
     #[serde(default = "default_play_analysis_release_ignore_threshold_ms")]
     pub release_ignore_threshold_ms: u32,
     #[serde(default = "default_play_analysis_release_window_ms")]
@@ -59,6 +61,7 @@ impl Default for PlayAnalysisConfig {
     fn default() -> Self {
         Self {
             open_on_startup: false,
+            compact_mode: false,
             release_ignore_threshold_ms: default_play_analysis_release_ignore_threshold_ms(),
             release_window_ms: default_play_analysis_release_window_ms(),
             release_ok_threshold_ms: default_play_analysis_release_ok_threshold_ms(),
@@ -78,11 +81,11 @@ pub fn default_play_analysis_release_window_ms() -> u32 {
 }
 
 pub fn default_play_analysis_release_ok_threshold_ms() -> u32 {
-    80
+    60
 }
 
 pub fn default_play_analysis_release_ng_threshold_ms() -> u32 {
-    160
+    80
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

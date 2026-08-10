@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque, hash_map::Entry};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use bmz_core::clear::ClearType;
@@ -8,8 +8,7 @@ use bmz_gameplay::input::backend::{DeviceId, PhysicalControl};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot};
 use bmz_render::snapshot::RenderSnapshot;
 
-use crate::config::play::lane_from_config;
-use crate::config::play_input::resolve_play_bindings;
+use crate::config::play_input::lane_binding_for_key_mode;
 use crate::config::profile_config::{
     PlayAnalysisConfig, PlayAnalysisControllerModeConfig, ProfileInputConfig,
 };
@@ -21,9 +20,13 @@ use super::*;
 pub(super) struct PlayAnalysisPanelState {
     started_at: Instant,
     started_at_unix: i64,
+    daily_press_day: i64,
+    daily_lane_presses: [u64; bmz_core::lane::LANE_COUNT],
     selected_history_id: Option<i64>,
+    counted_pressed_inputs: HashMap<PhysicalInputKey, Lane>,
     pressed_since: HashMap<PhysicalInputKey, PressSampleStart>,
     release_samples: VecDeque<ReleaseSample>,
+    last_release_by_lane: [Option<f32>; bmz_core::lane::LANE_COUNT],
     tweet_status: String,
 }
 
@@ -32,9 +35,13 @@ impl Default for PlayAnalysisPanelState {
         Self {
             started_at: Instant::now(),
             started_at_unix: unix_now(),
+            daily_press_day: local_day_key(),
+            daily_lane_presses: [0; bmz_core::lane::LANE_COUNT],
             selected_history_id: None,
+            counted_pressed_inputs: HashMap::new(),
             pressed_since: HashMap::new(),
             release_samples: VecDeque::new(),
+            last_release_by_lane: [None; bmz_core::lane::LANE_COUNT],
             tweet_status: String::new(),
         }
     }
@@ -98,17 +105,17 @@ pub(super) fn build_play_analysis_panel(
     state.observe_releases(config, panel.input_config, panel.pressed_play_inputs);
     let mut actions = PlayAnalysisPanelActions::default();
 
-    localized_sized_panel_window(
-        "bmz_play_analysis",
-        "プレー分析 (F7)".to_string(),
-        ctx,
-        visible,
-        520.0,
-        760.0,
-        egui::pos2(96.0, 48.0),
-    )
-    .show(ctx, |ui| {
-        scrollable_window_content(ui, |ui| {
+    play_analysis_window(ctx, visible).show(ctx, |ui| {
+        let max_height = ui.available_rect_before_wrap().height().max(64.0);
+        egui::ScrollArea::vertical().max_height(max_height).show(ui, |ui| {
+            if config.compact_mode {
+                actions.save_profile |= build_compact_view(ui, state, config, &panel);
+                return;
+            }
+
+            if ui.checkbox(&mut config.compact_mode, "コンパクトモード").changed() {
+                actions.save_profile = true;
+            }
             if ui.checkbox(&mut config.open_on_startup, "起動時に自動で開く").changed() {
                 actions.save_profile = true;
             }
@@ -126,9 +133,9 @@ pub(super) fn build_play_analysis_panel(
                     panel.difficulty_tables,
                 );
             });
-            egui::CollapsingHeader::new("ノーツ数")
-                .default_open(true)
-                .show(ui, |ui| build_notes_view(ui, panel.scene, panel.score_db));
+            egui::CollapsingHeader::new("ノーツ数").default_open(true).show(ui, |ui| {
+                build_notes_view(ui, state, config, panel.score_db);
+            });
             egui::CollapsingHeader::new("コントローラ").default_open(true).show(ui, |ui| {
                 actions.save_profile |= build_controller_view(
                     ui,
@@ -149,6 +156,31 @@ pub(super) fn build_play_analysis_panel(
     actions
 }
 
+fn build_compact_view(
+    ui: &mut egui::Ui,
+    state: &mut PlayAnalysisPanelState,
+    config: &mut PlayAnalysisConfig,
+    panel: &PlayAnalysisPanelContext<'_>,
+) -> bool {
+    build_today_notes_compact(ui, panel.score_db);
+    ui.separator();
+    build_current_lane_pattern(ui, panel.scene);
+    ui.separator();
+    let active = resolve_active_inputs(
+        panel.input_config,
+        config.controller_mode,
+        panel.pressed_play_inputs,
+    );
+    build_controller_layout(ui, state, config, &active);
+    ui.separator();
+    let mut changed = false;
+    if ui.button("フルモードに戻る").clicked() {
+        config.compact_mode = false;
+        changed = true;
+    }
+    changed
+}
+
 fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -156,54 +188,103 @@ fn unix_now() -> i64 {
         .unwrap_or_default()
 }
 
+fn local_day_key() -> i64 {
+    unix_now() / 86_400
+}
+
+fn play_analysis_window<'open>(
+    ctx: &egui::Context,
+    visible: &'open mut bool,
+) -> egui::Window<'open> {
+    let constrain = ctx.content_rect().shrink(PANEL_VIEWPORT_MARGIN);
+    let chrome = panel_window_chrome(ctx);
+    let (default_inner, max_inner, clamped_default_pos) =
+        clamp_panel_layout(constrain, chrome, 520.0, 760.0, egui::pos2(96.0, 48.0));
+    let window_id = egui::Id::new("bmz_play_analysis_v3");
+    let pos = ctx
+        .memory(|memory| memory.area_rect(window_id))
+        .map(|rect| constrain_window_rect_to_area(rect, constrain).min)
+        .unwrap_or(clamped_default_pos);
+    egui::Window::new("プレー分析 (F7)")
+        .id(window_id)
+        .open(visible)
+        .resizable(true)
+        .constrain_to(constrain)
+        .current_pos(pos)
+        .default_size(default_inner)
+        .max_size(max_inner)
+        .min_size([240.0, 120.0])
+}
+
 fn build_notes_view(
     ui: &mut egui::Ui,
-    scene: &AppSceneSnapshot,
+    state: &PlayAnalysisPanelState,
+    config: &PlayAnalysisConfig,
     score_db: &crate::storage::score_db::ScoreDatabase,
 ) {
     let today = score_db.note_count_today().ok();
     let months = score_db.monthly_note_counts(12).unwrap_or_default();
     let years = score_db.yearly_note_counts(8).unwrap_or_default();
 
-    ui.columns(3, |columns| {
-        columns[0].heading("今日");
-        match today {
-            Some(row) => note_aggregate_line(&mut columns[0], &row),
+    ui.horizontal_wrapped(|ui| {
+        note_aggregate_block(ui, "今日", |ui| match today {
+            Some(row) => note_aggregate_line(ui, &row),
             None => {
-                columns[0].label("読み込み失敗");
+                ui.label("読み込み失敗");
             }
-        }
-
-        columns[1].heading("月次");
-        for row in &months {
-            note_aggregate_line(&mut columns[1], row);
-        }
-
-        columns[2].heading("年次");
-        for row in &years {
-            note_aggregate_line(&mut columns[2], row);
-        }
+        });
+        note_aggregate_block(ui, "月次", |ui| {
+            for row in &months {
+                note_aggregate_line(ui, row);
+            }
+        });
+        note_aggregate_block(ui, "年次", |ui| {
+            for row in &years {
+                note_aggregate_line(ui, row);
+            }
+        });
     });
 
     ui.separator();
-    ui.heading("レーンごとのノーツ数");
-    match current_lane_counts(scene) {
-        Some(counts) => {
-            ui.horizontal_wrapped(|ui| {
-                for (index, count) in counts.iter().enumerate() {
-                    ui.label(format!("L{}: {}", index + 1, count));
-                }
-            });
+    ui.heading("レーンごとの入力数");
+    ui.horizontal_wrapped(|ui| {
+        for &lane in note_count_display_lanes(config.controller_mode) {
+            let count = state.daily_lane_presses[lane.index()];
+            let label = lane_count_label(config.controller_mode, lane);
+            ui.label(format!("{label}: {count}"));
         }
-        None => {
-            ui.label("選択中またはプレイ中の譜面から取得できるときに表示します。");
-        }
-    }
-    ui.small("履歴全体のレーン別累計は、プレイ結果にレーン内訳を保存する追加スキーマが必要です。");
+    });
+    ui.small("このウィンドウを開いている間に今日押した回数です。押下開始時に1回だけ加算します。");
 }
 
 fn note_aggregate_line(ui: &mut egui::Ui, row: &crate::storage::score_db::NoteCountAggregate) {
     ui.label(format!("{}  {:>8} notes  {} plays", row.label, row.total_notes, row.play_count));
+}
+
+fn build_today_notes_compact(
+    ui: &mut egui::Ui,
+    score_db: &crate::storage::score_db::ScoreDatabase,
+) {
+    ui.heading("本日のノーツ数");
+    match score_db.note_count_today() {
+        Ok(row) => {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new(format_u64(row.total_notes)).strong().size(20.0));
+                ui.label("notes");
+                ui.label(format!("{} plays", row.play_count));
+            });
+        }
+        Err(_) => {
+            ui.label("読み込み失敗");
+        }
+    }
+}
+
+fn note_aggregate_block(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
+    ui.vertical(|ui| {
+        ui.heading(title);
+        add_contents(ui);
+    });
 }
 
 fn build_tweet_view(
@@ -233,35 +314,37 @@ fn build_tweet_view(
         ui.small(&state.tweet_status);
     }
 
-    ui.label("集計対象の難易度表");
-    if difficulty_tables.is_empty() {
-        ui.small("読み込まれている難易度表がありません。");
-    } else {
-        for table in difficulty_tables {
-            let label = if table.name.trim().is_empty() {
-                table.source_url.as_str()
-            } else {
-                table.name.as_str()
-            };
-            let mut enabled = config.tweet_table_sources.contains(&table.source_url);
-            if ui.checkbox(&mut enabled, label).changed() {
-                if enabled {
-                    config.tweet_table_sources.push(table.source_url.clone());
+    egui::CollapsingHeader::new("集計対象の難易度表").default_open(false).show(ui, |ui| {
+        if difficulty_tables.is_empty() {
+            ui.small("読み込まれている難易度表がありません。");
+        } else {
+            for table in difficulty_tables {
+                let label = if table.name.trim().is_empty() {
+                    table.source_url.as_str()
                 } else {
-                    config.tweet_table_sources.retain(|source| source != &table.source_url);
+                    table.name.as_str()
+                };
+                let mut enabled = config.tweet_table_sources.contains(&table.source_url);
+                if ui.checkbox(&mut enabled, label).changed() {
+                    if enabled {
+                        config.tweet_table_sources.push(table.source_url.clone());
+                    } else {
+                        config.tweet_table_sources.retain(|source| source != &table.source_url);
+                    }
+                    changed = true;
                 }
-                changed = true;
             }
         }
-    }
+    });
 
     ui.separator();
     ui.label("ツイート文字列");
     let mut preview = tweet;
+    let preview_width = ui.available_width().clamp(220.0, 440.0);
     ui.add(
         egui::TextEdit::multiline(&mut preview)
             .desired_rows(8)
-            .desired_width(f32::INFINITY)
+            .desired_width(preview_width)
             .interactive(false),
     );
     changed
@@ -470,6 +553,30 @@ fn build_current_view(ui: &mut egui::Ui, scene: &AppSceneSnapshot) {
     }
 }
 
+fn build_current_lane_pattern(ui: &mut egui::Ui, scene: &AppSceneSnapshot) {
+    match scene {
+        AppSceneSnapshot::Select(snapshot) => {
+            let row = snapshot
+                .rows
+                .iter()
+                .find(|row| row.index == snapshot.selected_index)
+                .or_else(|| snapshot.rows.first());
+            if let Some(row) = row {
+                let key_mode = row.chart_key_mode.unwrap_or(KeyMode::K7);
+                lane_pattern_row(ui, key_mode, &snapshot.lane_shuffle_pattern);
+            } else {
+                ui.label("レーン配置: -");
+            }
+        }
+        AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
+            lane_pattern_row(ui, snapshot.key_mode, &snapshot.lane_shuffle_pattern);
+        }
+        AppSceneSnapshot::Result(snapshot) => {
+            lane_pattern_row(ui, snapshot.key_mode, &snapshot.lane_shuffle_pattern);
+        }
+    }
+}
+
 fn build_render_snapshot_current(ui: &mut egui::Ui, snapshot: &RenderSnapshot) {
     ui.heading(&snapshot.title);
     two_col(ui, "難易度", difficulty_label(&snapshot.table_text_secondary, &snapshot.play_level));
@@ -636,7 +743,7 @@ fn build_controller_view(
         config.release_ng_threshold_ms = config.release_ok_threshold_ms;
         changed = true;
     }
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("LN無視しきい値");
         changed |= ui
             .add(
@@ -731,6 +838,12 @@ impl PlayAnalysisPanelState {
         pressed_play_inputs: &[(DeviceId, PhysicalControl)],
     ) {
         let now = Instant::now();
+        let day = local_day_key();
+        if self.daily_press_day != day {
+            self.daily_press_day = day;
+            self.daily_lane_presses = [0; bmz_core::lane::LANE_COUNT];
+            self.counted_pressed_inputs.clear();
+        }
         let active =
             resolve_active_inputs(input_config, config.controller_mode, pressed_play_inputs);
         let pressed = pressed_play_inputs
@@ -741,14 +854,21 @@ impl PlayAnalysisPanelState {
             let Some(resolved) = active.by_input.get(key).copied() else {
                 continue;
             };
+            if let Some(lane) = resolved.lane
+                && let Entry::Vacant(entry) = self.counted_pressed_inputs.entry(key.clone())
+            {
+                entry.insert(lane);
+                self.daily_lane_presses[lane.index()] =
+                    self.daily_lane_presses[lane.index()].saturating_add(1);
+            }
             let Some(lane) =
                 resolved.lane.filter(|lane| release_average_lane(config.controller_mode, *lane))
             else {
                 continue;
             };
-            self.pressed_since
-                .entry(key.clone())
-                .or_insert(PressSampleStart { started_at: now, lane: Some(lane) });
+            if let Entry::Vacant(entry) = self.pressed_since.entry(key.clone()) {
+                entry.insert(PressSampleStart { started_at: now, lane: Some(lane) });
+            }
         }
         let released = self
             .pressed_since
@@ -756,6 +876,8 @@ impl PlayAnalysisPanelState {
             .filter(|key| !pressed.contains(*key))
             .cloned()
             .collect::<Vec<_>>();
+        self.counted_pressed_inputs.retain(|key, _| pressed.contains(key));
+        let mut updated_release_lanes = Vec::new();
         for key in released {
             if let Some(started) = self.pressed_since.remove(&key) {
                 let held_ms = now.duration_since(started.started_at).as_secs_f32() * 1000.0;
@@ -765,6 +887,9 @@ impl PlayAnalysisPanelState {
                         lane: started.lane,
                         held_ms,
                     });
+                    if let Some(lane) = started.lane {
+                        updated_release_lanes.push(lane);
+                    }
                 }
             }
         }
@@ -773,6 +898,9 @@ impl PlayAnalysisPanelState {
             now.duration_since(sample.released_at).as_secs_f32() * 1000.0 > window
         }) {
             self.release_samples.pop_front();
+        }
+        for lane in updated_release_lanes {
+            self.last_release_by_lane[lane.index()] = self.lane_average_ms(lane);
         }
     }
 
@@ -788,11 +916,8 @@ impl PlayAnalysisPanelState {
         )
     }
 
-    fn lane_average_label(&self, lane: Lane) -> String {
-        match self.lane_average_ms(lane) {
-            Some(value) => format!("{value:.0}ms"),
-            None => "-".to_string(),
-        }
+    fn lane_release_display_ms(&self, lane: Lane) -> Option<f32> {
+        self.last_release_by_lane[lane.index()]
     }
 
     fn lane_average_ms(&self, lane: Lane) -> Option<f32> {
@@ -828,58 +953,31 @@ fn resolve_active_inputs(
     mode: PlayAnalysisControllerModeConfig,
     pressed_play_inputs: &[(DeviceId, PhysicalControl)],
 ) -> ActiveControllerInputs {
-    let key_mode = controller_mode_key_mode(mode);
-    let Ok(bindings) = resolve_play_bindings(input_config, key_mode) else {
-        return ActiveControllerInputs::default();
-    };
-    let entries = bindings
-        .iter()
-        .filter_map(|entry| {
-            let lane = entry.lane.map(lane_from_config)?;
-            if !controller_mode_includes_lane(mode, lane) {
-                return None;
-            }
-            Some((entry.control.clone(), lane, entry.scratch.map(scratch_direction_from_config)))
-        })
-        .collect::<Vec<_>>();
     let mut active = ActiveControllerInputs::default();
-    for (device, control) in pressed_play_inputs {
-        if let Some((_, lane, scratch_direction)) = entries
-            .iter()
-            .find(|(candidate, _, _)| physical_control_matches_name(control, candidate))
-        {
-            active.lanes.insert(*lane);
-            if *scratch_direction == Some(ScratchDirection::Up) {
-                active.scratch_up.insert(*lane);
+    for &key_mode in controller_binding_key_modes(mode) {
+        let Ok(binding) = lane_binding_for_key_mode(input_config, key_mode) else {
+            continue;
+        };
+        for (device, control) in pressed_play_inputs {
+            if let Some(resolved) = binding.resolve_entry(*device, control) {
+                let Some(display_lane) = controller_display_lane(mode, resolved.lane) else {
+                    continue;
+                };
+                active.lanes.insert(display_lane);
+                if resolved.scratch_direction == Some(ScratchDirection::Up) {
+                    active.scratch_up.insert(display_lane);
+                }
+                if resolved.scratch_direction == Some(ScratchDirection::Down) {
+                    active.scratch_down.insert(display_lane);
+                }
+                active.by_input.insert(
+                    PhysicalInputKey { device: *device, control: control.clone() },
+                    ResolvedInput { lane: Some(display_lane) },
+                );
             }
-            if *scratch_direction == Some(ScratchDirection::Down) {
-                active.scratch_down.insert(*lane);
-            }
-            active.by_input.insert(
-                PhysicalInputKey { device: *device, control: control.clone() },
-                ResolvedInput { lane: Some(*lane) },
-            );
         }
     }
     active
-}
-
-fn physical_control_matches_name(control: &PhysicalControl, name: &str) -> bool {
-    match control {
-        PhysicalControl::KeyboardKey(control) | PhysicalControl::GamepadButton(control) => {
-            control == name
-        }
-        PhysicalControl::HidButton(button) => name == format!("Button{button}"),
-    }
-}
-
-fn scratch_direction_from_config(
-    value: crate::config::profile_config::ScratchDirectionConfig,
-) -> ScratchDirection {
-    match value {
-        crate::config::profile_config::ScratchDirectionConfig::Up => ScratchDirection::Up,
-        crate::config::profile_config::ScratchDirectionConfig::Down => ScratchDirection::Down,
-    }
 }
 
 fn build_controller_layout(
@@ -905,8 +1003,8 @@ fn build_controller_layout(
                 ui,
                 state,
                 config,
-                Lane::Scratch2,
-                key_lanes_2p(),
+                Lane::Scratch,
+                key_lanes_1p(),
                 ScratchPlacement::Right,
                 active,
             );
@@ -964,18 +1062,71 @@ fn build_seven_key_controller(
 }
 
 fn build_scratch_button(ui: &mut egui::Ui, scratch: Lane, active: &ActiveControllerInputs) {
-    ui.vertical(|ui| {
-        let up = active.scratch_up.contains(&scratch);
-        let down = active.scratch_down.contains(&scratch);
-        let fill = if up || down {
-            egui::Color32::from_rgb(120, 30, 36)
-        } else {
-            egui::Color32::from_gray(32)
-        };
-        let label =
-            format!("SCR\n{} {}", if up { "UP" } else { "up" }, if down { "DN" } else { "dn" });
-        ui.add_sized([82.0, 96.0], egui::Button::new(label).fill(fill));
-    });
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(82.0, 96.0), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    let up = active.scratch_up.contains(&scratch);
+    let down = active.scratch_down.contains(&scratch);
+    let center = egui::pos2(rect.center().x, rect.top() + 48.0);
+    let radius = 34.0;
+    let inactive = egui::Color32::from_gray(38);
+    let active_color = egui::Color32::from_rgb(230, 46, 58);
+    let rim = egui::Color32::from_gray(175);
+
+    painter.circle_filled(center, radius, egui::Color32::from_gray(20));
+    paint_scratch_half(
+        &painter,
+        center,
+        radius - 2.0,
+        true,
+        if up { active_color } else { inactive },
+    );
+    paint_scratch_half(
+        &painter,
+        center,
+        radius - 2.0,
+        false,
+        if down { active_color } else { inactive },
+    );
+    painter.circle_stroke(center, radius, egui::Stroke::new(3.0_f32, rim));
+    painter.line_segment(
+        [egui::pos2(center.x - radius, center.y), egui::pos2(center.x + radius, center.y)],
+        egui::Stroke::new(2.0_f32, egui::Color32::from_gray(80)),
+    );
+    painter.line_segment(
+        [
+            egui::pos2(center.x - 16.0, center.y + 18.0),
+            egui::pos2(center.x + 18.0, center.y - 20.0),
+        ],
+        egui::Stroke::new(5.0_f32, egui::Color32::from_gray(230)),
+    );
+    painter.text(
+        egui::pos2(center.x, rect.bottom() - 11.0),
+        egui::Align2::CENTER_CENTER,
+        "SCR",
+        egui::FontId::proportional(12.0),
+        egui::Color32::from_gray(170),
+    );
+    response.on_hover_text("Scratch");
+}
+
+fn paint_scratch_half(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    upper: bool,
+    color: egui::Color32,
+) {
+    let (start, end) = if upper {
+        (std::f32::consts::PI, std::f32::consts::TAU)
+    } else {
+        (0.0, std::f32::consts::PI)
+    };
+    let mut points = Vec::with_capacity(18);
+    for step in 0..=16 {
+        let angle = start + (end - start) * step as f32 / 16.0;
+        points.push(egui::pos2(center.x + angle.cos() * radius, center.y + angle.sin() * radius));
+    }
+    painter.add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
 }
 
 fn build_key_button_grid(
@@ -1000,18 +1151,32 @@ fn build_key_button_grid(
     });
 }
 
-fn release_stroke(config: &PlayAnalysisConfig, average_ms: Option<f32>) -> egui::Stroke {
-    let Some(average_ms) = average_ms else {
-        return egui::Stroke::new(1.0_f32, egui::Color32::from_gray(60));
+fn release_color(config: &PlayAnalysisConfig, release_ms: Option<f32>) -> egui::Color32 {
+    let Some(release_ms) = release_ms else {
+        return egui::Color32::from_gray(110);
     };
-    let color = if average_ms <= config.release_ok_threshold_ms as f32 {
+    if release_ms <= config.release_ok_threshold_ms as f32 {
         egui::Color32::from_rgb(40, 190, 95)
-    } else if average_ms <= config.release_ng_threshold_ms as f32 {
+    } else if release_ms <= config.release_ng_threshold_ms as f32 {
         egui::Color32::from_rgb(235, 200, 60)
     } else {
         egui::Color32::from_rgb(230, 70, 70)
-    };
-    egui::Stroke::new(4.0_f32, color)
+    }
+}
+
+fn release_stroke(config: &PlayAnalysisConfig, release_ms: Option<f32>) -> egui::Stroke {
+    let width = if release_ms.is_some() { 4.0_f32 } else { 1.0_f32 };
+    egui::Stroke::new(width, release_color(config, release_ms))
+}
+
+fn release_key_label(release_ms: Option<f32>) -> String {
+    match release_ms {
+        Some(value) => {
+            let value = value.round().clamp(0.0, 999.0) as u16;
+            format!("{value:>3}")
+        }
+        None => "---".to_string(),
+    }
 }
 
 fn build_controller_key_button(
@@ -1022,23 +1187,29 @@ fn build_controller_key_button(
     active: &ActiveControllerInputs,
 ) {
     let number = display_key_number(KeyMode::K14, lane).unwrap_or(0);
+    let release_ms = state.lane_release_display_ms(lane);
     let fill = if active.lanes.contains(&lane) {
         egui::Color32::from_rgb(130, 220, 255)
+    } else if release_ms.is_none() {
+        egui::Color32::from_gray(55)
     } else if matches!(number, 2 | 4 | 6) {
         egui::Color32::from_rgb(0, 60, 150)
     } else {
         egui::Color32::from_rgb(235, 238, 244)
     };
-    let text_color = if matches!(number, 2 | 4 | 6) && !active.lanes.contains(&lane) {
-        egui::Color32::WHITE
-    } else {
-        egui::Color32::from_gray(25)
-    };
-    let label = format!("{}\n{}", number, state.lane_average_label(lane));
-    let stroke = release_stroke(config, state.lane_average_ms(lane));
+    let value_color = release_color(config, release_ms);
+    let text_color = if release_ms.is_some() { value_color } else { egui::Color32::from_gray(150) };
+    let stroke = release_stroke(config, release_ms);
     ui.add_sized(
         [52.0, 48.0],
-        egui::Button::new(egui::RichText::new(label).color(text_color)).fill(fill).stroke(stroke),
+        egui::Button::new(
+            egui::RichText::new(release_key_label(release_ms))
+                .monospace()
+                .size(17.0)
+                .color(text_color),
+        )
+        .fill(fill)
+        .stroke(stroke),
     );
 }
 
@@ -1050,12 +1221,32 @@ fn key_lanes_2p() -> [Lane; 7] {
     [Lane::Key8, Lane::Key9, Lane::Key10, Lane::Key11, Lane::Key12, Lane::Key13, Lane::Key14]
 }
 
-fn controller_mode_key_mode(mode: PlayAnalysisControllerModeConfig) -> KeyMode {
+fn controller_binding_key_modes(mode: PlayAnalysisControllerModeConfig) -> &'static [KeyMode] {
     match mode {
         PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2 => {
-            KeyMode::K7
+            &[KeyMode::K7, KeyMode::K14]
         }
-        PlayAnalysisControllerModeConfig::Key14 => KeyMode::K14,
+        PlayAnalysisControllerModeConfig::Key14 => &[KeyMode::K14],
+    }
+}
+
+fn controller_display_lane(mode: PlayAnalysisControllerModeConfig, lane: Lane) -> Option<Lane> {
+    match mode {
+        PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2 => {
+            Some(match lane {
+                Lane::Scratch | Lane::Scratch2 => Lane::Scratch,
+                Lane::Key1 | Lane::Key8 => Lane::Key1,
+                Lane::Key2 | Lane::Key9 => Lane::Key2,
+                Lane::Key3 | Lane::Key10 => Lane::Key3,
+                Lane::Key4 | Lane::Key11 => Lane::Key4,
+                Lane::Key5 | Lane::Key12 => Lane::Key5,
+                Lane::Key6 | Lane::Key13 => Lane::Key6,
+                Lane::Key7 | Lane::Key14 => Lane::Key7,
+            })
+        }
+        PlayAnalysisControllerModeConfig::Key14 => {
+            controller_mode_includes_lane(mode, lane).then_some(lane)
+        }
     }
 }
 
@@ -1111,7 +1302,7 @@ fn controller_mode_includes_lane(mode: PlayAnalysisControllerModeConfig, lane: L
 
 fn release_average_lane(mode: PlayAnalysisControllerModeConfig, lane: Lane) -> bool {
     match mode {
-        PlayAnalysisControllerModeConfig::Key7P1 => {
+        PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2 => {
             matches!(
                 lane,
                 Lane::Key1
@@ -1121,18 +1312,6 @@ fn release_average_lane(mode: PlayAnalysisControllerModeConfig, lane: Lane) -> b
                     | Lane::Key5
                     | Lane::Key6
                     | Lane::Key7
-            )
-        }
-        PlayAnalysisControllerModeConfig::Key7P2 => {
-            matches!(
-                lane,
-                Lane::Key8
-                    | Lane::Key9
-                    | Lane::Key10
-                    | Lane::Key11
-                    | Lane::Key12
-                    | Lane::Key13
-                    | Lane::Key14
             )
         }
         PlayAnalysisControllerModeConfig::Key14 => matches!(
@@ -1163,16 +1342,76 @@ fn controller_mode_label(mode: PlayAnalysisControllerModeConfig) -> &'static str
     }
 }
 
-fn current_lane_counts(scene: &AppSceneSnapshot) -> Option<[usize; bmz_core::lane::LANE_COUNT]> {
-    let snapshot = match scene {
-        AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => snapshot,
-        _ => return None,
-    };
-    let mut counts = [0; bmz_core::lane::LANE_COUNT];
-    for (lane, count) in counts.iter_mut().enumerate() {
-        *count = snapshot.visible_notes[lane].len() + snapshot.visible_mines[lane].len();
+fn note_count_display_lanes(mode: PlayAnalysisControllerModeConfig) -> &'static [Lane] {
+    match mode {
+        PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2 => &[
+            Lane::Scratch,
+            Lane::Key1,
+            Lane::Key2,
+            Lane::Key3,
+            Lane::Key4,
+            Lane::Key5,
+            Lane::Key6,
+            Lane::Key7,
+        ],
+        PlayAnalysisControllerModeConfig::Key14 => &[
+            Lane::Scratch,
+            Lane::Key1,
+            Lane::Key2,
+            Lane::Key3,
+            Lane::Key4,
+            Lane::Key5,
+            Lane::Key6,
+            Lane::Key7,
+            Lane::Scratch2,
+            Lane::Key8,
+            Lane::Key9,
+            Lane::Key10,
+            Lane::Key11,
+            Lane::Key12,
+            Lane::Key13,
+            Lane::Key14,
+        ],
     }
-    Some(counts)
+}
+
+fn lane_count_label(mode: PlayAnalysisControllerModeConfig, lane: Lane) -> String {
+    match (mode, lane) {
+        (PlayAnalysisControllerModeConfig::Key14, Lane::Scratch) => "1P SCR".to_string(),
+        (_, Lane::Scratch) => "SCR".to_string(),
+        (PlayAnalysisControllerModeConfig::Key14, Lane::Scratch2) => "2P SCR".to_string(),
+        (_, Lane::Scratch2) => "SCR".to_string(),
+        (PlayAnalysisControllerModeConfig::Key14, lane)
+            if matches!(
+                lane,
+                Lane::Key1
+                    | Lane::Key2
+                    | Lane::Key3
+                    | Lane::Key4
+                    | Lane::Key5
+                    | Lane::Key6
+                    | Lane::Key7
+            ) =>
+        {
+            format!("1P {}", display_key_number(KeyMode::K14, lane).unwrap_or(0))
+        }
+        (PlayAnalysisControllerModeConfig::Key14, lane)
+            if matches!(
+                lane,
+                Lane::Key8
+                    | Lane::Key9
+                    | Lane::Key10
+                    | Lane::Key11
+                    | Lane::Key12
+                    | Lane::Key13
+                    | Lane::Key14
+            ) =>
+        {
+            format!("2P {}", display_key_number(KeyMode::K14, lane).unwrap_or(0))
+        }
+        (_, lane) => display_key_number(KeyMode::K14, lane)
+            .map_or_else(|| "-".to_string(), |number| number.to_string()),
+    }
 }
 
 fn two_col(ui: &mut egui::Ui, label: &str, value: String) {
@@ -1186,15 +1425,16 @@ fn two_col(ui: &mut egui::Ui, label: &str, value: String) {
 }
 
 fn lane_pattern_row(ui: &mut egui::Ui, key_mode: KeyMode, pattern: &[u8]) {
-    ui.horizontal(|ui| {
-        ui.add_sized(
-            [96.0, 20.0],
-            egui::Label::new(
-                egui::RichText::new("レーン配置").color(egui::Color32::from_gray(150)),
-            ),
-        );
+    let label = egui::RichText::new("レーン配置").color(egui::Color32::from_gray(150));
+    if ui.available_width() < 430.0 {
+        ui.label(label);
         build_lane_pattern_view(ui, key_mode, pattern);
-    });
+    } else {
+        ui.horizontal(|ui| {
+            ui.add_sized([96.0, 20.0], egui::Label::new(label));
+            build_lane_pattern_view(ui, key_mode, pattern);
+        });
+    }
 }
 
 fn build_lane_pattern_view(ui: &mut egui::Ui, key_mode: KeyMode, pattern: &[u8]) {
@@ -1204,37 +1444,53 @@ fn build_lane_pattern_view(ui: &mut egui::Ui, key_mode: KeyMode, pattern: &[u8])
         .copied()
         .filter(|lane| !matches!(lane, Lane::Scratch | Lane::Scratch2))
         .collect::<Vec<_>>();
+    let lane_count = key_lanes.len().max(1) as f32;
+    let button_width =
+        ((ui.available_width() - (lane_count - 1.0) * 4.0) / lane_count).clamp(24.0, 42.0);
+    let button_height = if button_width < 34.0 { 52.0 } else { 64.0 };
+    let text_size = if button_width < 34.0 { 16.0 } else { 20.0 };
     ui.horizontal(|ui| {
         for (index, lane) in key_lanes.iter().copied().enumerate() {
             ui.push_id(("play_analysis_lane_pattern", index), |ui| {
                 let label = lane_pattern_display_label(key_mode, pattern, lane);
-                let is_blue = display_key_number(key_mode, lane)
+                let is_blue = lane_pattern_source_key_number(key_mode, pattern, lane)
                     .is_some_and(|number| matches!(number, 2 | 4 | 6));
-                ui.add_sized([42.0, 64.0], lane_pattern_button(label, is_blue))
-                    .on_hover_text(format!("display lane {}", index + 1));
+                ui.add_sized(
+                    [button_width, button_height],
+                    lane_pattern_button(label, is_blue, text_size),
+                )
+                .on_hover_text(format!("display lane {}", index + 1));
             });
         }
     });
 }
 
-fn lane_pattern_button(label: String, is_blue: bool) -> egui::Button<'static> {
+fn lane_pattern_button(label: String, is_blue: bool, text_size: f32) -> egui::Button<'static> {
     let fill = if is_blue {
         egui::Color32::from_rgb(0, 60, 150)
     } else {
         egui::Color32::from_rgb(235, 238, 244)
     };
     let text_color = if is_blue { egui::Color32::WHITE } else { egui::Color32::from_gray(35) };
-    egui::Button::new(egui::RichText::new(label).size(20.0).color(text_color)).fill(fill)
+    egui::Button::new(egui::RichText::new(label).size(text_size).color(text_color)).fill(fill)
 }
 
 fn lane_pattern_display_label(key_mode: KeyMode, pattern: &[u8], display_lane: Lane) -> String {
+    lane_pattern_source_key_number(key_mode, pattern, display_lane)
+        .map_or_else(|| "-".to_string(), |number| number.to_string())
+}
+
+fn lane_pattern_source_key_number(
+    key_mode: KeyMode,
+    pattern: &[u8],
+    display_lane: Lane,
+) -> Option<u8> {
     let source = pattern
         .get(display_lane.index())
         .copied()
         .and_then(|lane| Lane::ALL.get(usize::from(lane)).copied())
         .unwrap_or(display_lane);
     display_key_number(key_mode, source)
-        .map_or_else(|| "-".to_string(), |number| number.to_string())
 }
 
 fn display_key_number(key_mode: KeyMode, lane: Lane) -> Option<u8> {
