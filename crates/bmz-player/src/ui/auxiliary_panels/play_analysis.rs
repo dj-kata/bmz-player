@@ -117,53 +117,56 @@ pub(super) fn build_play_analysis_panel(
     state.observe_lane_pattern(panel.scene);
     let mut actions = PlayAnalysisPanelActions::default();
 
-    play_analysis_window(ctx, visible).show(ctx, |ui| {
-        let max_height = ui.available_rect_before_wrap().height().max(64.0);
-        egui::ScrollArea::vertical().max_height(max_height).show(ui, |ui| {
+    play_analysis_window(ctx, visible, config.compact_mode, config.controller_mode).show(
+        ctx,
+        |ui| {
             if config.compact_mode {
                 actions.save_profile |= build_compact_view(ui, state, config, &panel);
-                return;
-            }
+            } else {
+                let max_height = ui.available_rect_before_wrap().height().max(64.0);
+                egui::ScrollArea::vertical().max_height(max_height).show(ui, |ui| {
+                    if ui.checkbox(&mut config.compact_mode, "コンパクトモード").changed() {
+                        actions.save_profile = true;
+                    }
+                    if ui.checkbox(&mut config.open_on_startup, "起動時に自動で開く").changed()
+                    {
+                        actions.save_profile = true;
+                    }
 
-            if ui.checkbox(&mut config.compact_mode, "コンパクトモード").changed() {
-                actions.save_profile = true;
+                    egui::CollapsingHeader::new("現在の状態")
+                        .default_open(true)
+                        .show(ui, |ui| build_current_view(ui, state, panel.scene));
+                    egui::CollapsingHeader::new("成果ツイート").default_open(true).show(ui, |ui| {
+                        actions.save_profile |= build_tweet_view(
+                            ui,
+                            state,
+                            config,
+                            panel.score_db,
+                            panel.library_db,
+                            panel.difficulty_tables,
+                        );
+                    });
+                    egui::CollapsingHeader::new("ノーツ数").default_open(true).show(ui, |ui| {
+                        build_notes_view(ui, state, config, panel.score_db);
+                    });
+                    egui::CollapsingHeader::new("コントローラ").default_open(true).show(ui, |ui| {
+                        actions.save_profile |= build_controller_view(
+                            ui,
+                            state,
+                            config,
+                            panel.input_config,
+                            panel.connected_gamepads,
+                            panel.pressed_controls,
+                            panel.pressed_play_inputs,
+                        );
+                    });
+                    egui::CollapsingHeader::new("プレー履歴").default_open(true).show(ui, |ui| {
+                        build_history_view(ui, state, panel.score_db, panel.library_db)
+                    });
+                });
             }
-            if ui.checkbox(&mut config.open_on_startup, "起動時に自動で開く").changed() {
-                actions.save_profile = true;
-            }
-
-            egui::CollapsingHeader::new("現在の状態")
-                .default_open(true)
-                .show(ui, |ui| build_current_view(ui, state, panel.scene));
-            egui::CollapsingHeader::new("成果ツイート").default_open(true).show(ui, |ui| {
-                actions.save_profile |= build_tweet_view(
-                    ui,
-                    state,
-                    config,
-                    panel.score_db,
-                    panel.library_db,
-                    panel.difficulty_tables,
-                );
-            });
-            egui::CollapsingHeader::new("ノーツ数").default_open(true).show(ui, |ui| {
-                build_notes_view(ui, state, config, panel.score_db);
-            });
-            egui::CollapsingHeader::new("コントローラ").default_open(true).show(ui, |ui| {
-                actions.save_profile |= build_controller_view(
-                    ui,
-                    state,
-                    config,
-                    panel.input_config,
-                    panel.connected_gamepads,
-                    panel.pressed_controls,
-                    panel.pressed_play_inputs,
-                );
-            });
-            egui::CollapsingHeader::new("プレー履歴")
-                .default_open(true)
-                .show(ui, |ui| build_history_view(ui, state, panel.score_db, panel.library_db));
-        });
-    });
+        },
+    );
 
     actions
 }
@@ -183,7 +186,11 @@ fn build_compact_view(
         config.controller_mode,
         panel.pressed_play_inputs,
     );
-    ui.horizontal_centered(|ui| {
+    ui.horizontal(|ui| {
+        ui.add_space(center_offset(
+            ui.available_width(),
+            controller_layout_width(config.controller_mode),
+        ));
         build_controller_layout(ui, state, config, &active);
     });
     ui.separator();
@@ -209,25 +216,38 @@ fn local_day_key() -> i64 {
 fn play_analysis_window<'open>(
     ctx: &egui::Context,
     visible: &'open mut bool,
+    compact: bool,
+    controller_mode: PlayAnalysisControllerModeConfig,
 ) -> egui::Window<'open> {
     let constrain = ctx.content_rect().shrink(PANEL_VIEWPORT_MARGIN);
     let chrome = panel_window_chrome(ctx);
+    let (width, height, window_id) = if compact {
+        let width =
+            if controller_mode == PlayAnalysisControllerModeConfig::Key14 { 640.0 } else { 360.0 };
+        (width, 226.0, egui::Id::new("bmz_play_analysis_compact_v2"))
+    } else {
+        (520.0, 760.0, egui::Id::new("bmz_play_analysis_v3"))
+    };
     let (default_inner, max_inner, clamped_default_pos) =
-        clamp_panel_layout(constrain, chrome, 520.0, 760.0, egui::pos2(96.0, 48.0));
-    let window_id = egui::Id::new("bmz_play_analysis_v3");
+        clamp_panel_layout(constrain, chrome, width, height, egui::pos2(96.0, 48.0));
     let pos = ctx
         .memory(|memory| memory.area_rect(window_id))
         .map(|rect| constrain_window_rect_to_area(rect, constrain).min)
         .unwrap_or(clamped_default_pos);
-    egui::Window::new("プレー分析 (F7)")
+    let mut window = egui::Window::new("プレー分析 (F7)")
         .id(window_id)
         .open(visible)
-        .resizable(true)
         .constrain_to(constrain)
         .current_pos(pos)
         .default_size(default_inner)
         .max_size(max_inner)
-        .min_size([240.0, 120.0])
+        .min_size([240.0, 120.0]);
+    if compact {
+        window = window.fixed_size(default_inner);
+    } else {
+        window = window.resizable(true);
+    }
+    window
 }
 
 fn build_notes_view(
@@ -281,22 +301,26 @@ fn build_today_notes_compact(
 ) {
     match score_db.note_count_today() {
         Ok(row) => {
-            ui.horizontal_centered(|ui| {
-                ui.label("today:");
-                ui.label(
-                    egui::RichText::new(format_u64(row.total_notes))
-                        .strong()
-                        .color(egui::Color32::from_rgb(120, 210, 255)),
-                );
-                ui.label("notes");
-                ui.label(",");
-                ui.label(
-                    egui::RichText::new(row.play_count.to_string())
-                        .strong()
-                        .color(egui::Color32::from_rgb(120, 210, 255)),
-                );
-                ui.label("plays");
-            });
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), 20.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.label("today:");
+                    ui.label(
+                        egui::RichText::new(format_u64(row.total_notes))
+                            .strong()
+                            .color(egui::Color32::from_rgb(120, 210, 255)),
+                    );
+                    ui.label("notes");
+                    ui.label(",");
+                    ui.label(
+                        egui::RichText::new(row.play_count.to_string())
+                            .strong()
+                            .color(egui::Color32::from_rgb(120, 210, 255)),
+                    );
+                    ui.label("plays");
+                },
+            );
         }
         Err(_) => {
             ui.label("読み込み失敗");
@@ -1208,20 +1232,6 @@ fn build_scratch_button(ui: &mut egui::Ui, scratch: Lane, active: &ActiveControl
         [egui::pos2(center.x - radius, center.y), egui::pos2(center.x + radius, center.y)],
         egui::Stroke::new(2.0_f32, egui::Color32::from_gray(80)),
     );
-    painter.line_segment(
-        [
-            egui::pos2(center.x - 16.0, center.y + 18.0),
-            egui::pos2(center.x + 18.0, center.y - 20.0),
-        ],
-        egui::Stroke::new(5.0_f32, egui::Color32::from_gray(230)),
-    );
-    painter.text(
-        egui::pos2(center.x, rect.bottom() - 11.0),
-        egui::Align2::CENTER_CENTER,
-        "SCR",
-        egui::FontId::proportional(12.0),
-        egui::Color32::from_gray(170),
-    );
     response.on_hover_text("Scratch");
 }
 
@@ -1285,13 +1295,19 @@ fn release_stroke(config: &PlayAnalysisConfig, release_ms: Option<f32>) -> egui:
     egui::Stroke::new(width, release_color(config, release_ms))
 }
 
-fn release_key_text(
+struct ReleaseKeyLine {
+    text: String,
+    color: egui::Color32,
+    size: f32,
+}
+
+fn release_key_lines(
     mode: PlayAnalysisReleaseDisplayModeConfig,
     release_ms: Option<f32>,
     note_count: u64,
     release_color: egui::Color32,
     note_color: egui::Color32,
-) -> egui::WidgetText {
+) -> Vec<ReleaseKeyLine> {
     let release = match release_ms {
         Some(value) => {
             let value = value.round().clamp(0.0, 999.0) as u16;
@@ -1299,39 +1315,28 @@ fn release_key_text(
         }
         None => "---".to_string(),
     };
-    let notes = format!("{:>3}", note_count.min(999));
-    let font_size = release_display_font_size(mode);
-    let release_format = egui::text::TextFormat {
-        font_id: egui::FontId::monospace(font_size),
-        color: release_color,
-        ..Default::default()
-    };
-    let note_format = egui::text::TextFormat {
-        font_id: egui::FontId::monospace(font_size),
-        color: note_color,
-        ..Default::default()
-    };
-    let mut job = egui::text::LayoutJob { halign: egui::Align::Center, ..Default::default() };
+    let notes = note_count.min(99_999).to_string();
     match mode {
         PlayAnalysisReleaseDisplayModeConfig::ReleaseOnly => {
-            job.append(&release, 0.0, release_format);
+            vec![ReleaseKeyLine { text: release, color: release_color, size: 17.0 }]
         }
-        PlayAnalysisReleaseDisplayModeConfig::ReleaseAndNotes => {
-            job.append(&format!("{release}\n"), 0.0, release_format);
-            job.append(&format!("{notes}n"), 0.0, note_format);
-        }
-        PlayAnalysisReleaseDisplayModeConfig::NotesOnly => {
-            job.append(&notes, 0.0, note_format);
-        }
+        PlayAnalysisReleaseDisplayModeConfig::ReleaseAndNotes => vec![
+            ReleaseKeyLine { text: release, color: release_color, size: 13.0 },
+            ReleaseKeyLine { size: note_font_size(note_count), text: notes, color: note_color },
+        ],
+        PlayAnalysisReleaseDisplayModeConfig::NotesOnly => vec![ReleaseKeyLine {
+            size: note_font_size(note_count),
+            text: notes,
+            color: note_color,
+        }],
     }
-    job.into()
 }
 
-fn release_display_font_size(mode: PlayAnalysisReleaseDisplayModeConfig) -> f32 {
-    match mode {
-        PlayAnalysisReleaseDisplayModeConfig::ReleaseOnly => 17.0,
-        PlayAnalysisReleaseDisplayModeConfig::ReleaseAndNotes => 13.0,
-        PlayAnalysisReleaseDisplayModeConfig::NotesOnly => 16.0,
+fn note_font_size(note_count: u64) -> f32 {
+    match note_count.min(99_999).to_string().len() {
+        0..=3 => 16.0,
+        4 => 13.0,
+        _ => 11.0,
     }
 }
 
@@ -1365,18 +1370,38 @@ fn build_controller_key_button(
         egui::Color32::from_gray(25)
     };
     let stroke = release_stroke(config, release_ms);
-    ui.add_sized(
-        [52.0, 48.0],
-        egui::Button::new(release_key_text(
-            config.release_display_mode,
-            release_ms,
-            note_count,
-            release_text_color,
-            note_text_color,
-        ))
-        .fill(fill)
-        .stroke(stroke),
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(52.0, 48.0), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect(rect, 3.0, fill, stroke, egui::StrokeKind::Inside);
+    let lines = release_key_lines(
+        config.release_display_mode,
+        release_ms,
+        note_count,
+        release_text_color,
+        note_text_color,
     );
+    if lines.len() == 1 {
+        let line = &lines[0];
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            &line.text,
+            egui::FontId::monospace(line.size),
+            line.color,
+        );
+    } else {
+        let center = rect.center();
+        for (line, y_offset) in lines.iter().zip([-8.0_f32, 8.0_f32]) {
+            painter.text(
+                egui::pos2(center.x, center.y + y_offset),
+                egui::Align2::CENTER_CENTER,
+                &line.text,
+                egui::FontId::monospace(line.size),
+                line.color,
+            );
+        }
+    }
+    response.on_hover_text(format!("{} inputs", note_count));
 }
 
 fn key_lanes_1p() -> [Lane; 7] {
@@ -1608,7 +1633,11 @@ fn lane_pattern_row(
 ) {
     let disabled_label = lane_pattern_disabled_label(key_mode, pattern, arrange, arrange_2p);
     if presentation == LanePatternPresentation::Compact {
-        ui.horizontal_centered(|ui| {
+        ui.horizontal(|ui| {
+            ui.add_space(center_offset(
+                ui.available_width(),
+                lane_pattern_view_width(ui, key_mode),
+            ));
             build_lane_pattern_view(ui, key_mode, pattern, disabled_label.as_deref());
         });
         return;
@@ -1639,8 +1668,9 @@ fn build_lane_pattern_view(
         .filter(|lane| !matches!(lane, Lane::Scratch | Lane::Scratch2))
         .collect::<Vec<_>>();
     let lane_count = key_lanes.len().max(1) as f32;
+    let spacing = ui.spacing().item_spacing.x;
     let button_width =
-        ((ui.available_width() - (lane_count - 1.0) * 4.0) / lane_count).clamp(24.0, 42.0);
+        ((ui.available_width() - (lane_count - 1.0) * spacing) / lane_count).clamp(24.0, 42.0);
     let button_height = if button_width < 34.0 { 52.0 } else { 64.0 };
     let text_size = if button_width < 34.0 { 16.0 } else { 20.0 };
     let response = ui.horizontal(|ui| {
@@ -1665,6 +1695,34 @@ fn build_lane_pattern_view(
             egui::FontId::proportional(18.0),
             egui::Color32::from_rgba_unmultiplied(255, 92, 92, 150),
         );
+    }
+}
+
+fn center_offset(available: f32, content: f32) -> f32 {
+    ((available - content) * 0.5).max(0.0)
+}
+
+fn lane_pattern_view_width(ui: &egui::Ui, key_mode: KeyMode) -> f32 {
+    let lane_count = key_mode
+        .active_lanes()
+        .iter()
+        .filter(|lane| !matches!(lane, Lane::Scratch | Lane::Scratch2))
+        .count()
+        .max(1) as f32;
+    let spacing = ui.spacing().item_spacing.x;
+    let button_width =
+        ((ui.available_width() - (lane_count - 1.0) * spacing) / lane_count).clamp(24.0, 42.0);
+    lane_count * button_width + (lane_count - 1.0) * spacing
+}
+
+fn controller_layout_width(mode: PlayAnalysisControllerModeConfig) -> f32 {
+    let key_grid = 232.0;
+    let scratch = 82.0;
+    let spacing = 8.0;
+    let side = key_grid + scratch + spacing;
+    match mode {
+        PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2 => side,
+        PlayAnalysisControllerModeConfig::Key14 => side * 2.0 + 12.0,
     }
 }
 
