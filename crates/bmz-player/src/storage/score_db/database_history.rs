@@ -79,7 +79,11 @@ impl ScoreDatabase {
                 device_type,
                 source_kind,
                 applied_double_option,
-                date(played_at, 'unixepoch', 'localtime')
+                date(played_at, 'unixepoch', 'localtime'),
+                CAST(strftime('%Y', played_at, 'unixepoch', 'localtime') AS INTEGER) || '/' ||
+                    CAST(strftime('%m', played_at, 'unixepoch', 'localtime') AS INTEGER) || '/' ||
+                    CAST(strftime('%d', played_at, 'unixepoch', 'localtime') AS INTEGER) || ' ' ||
+                    strftime('%H:%M', played_at, 'unixepoch', 'localtime')
             FROM score_history
             ORDER BY played_at DESC, id DESC
             LIMIT ?1 OFFSET ?2",
@@ -88,6 +92,7 @@ impl ScoreDatabase {
             Ok(ScoreHistoryDayEntry {
                 entry: score_history_entry_from_row(row)?,
                 local_day: row.get(23)?,
+                local_minute: row.get(24)?,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)

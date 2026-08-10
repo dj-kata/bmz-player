@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque, hash_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use bmz_core::clear::ClearType;
@@ -23,7 +23,7 @@ pub(super) struct PlayAnalysisPanelState {
     started_at_unix: i64,
     daily_press_day: i64,
     daily_lane_presses: [u64; bmz_core::lane::LANE_COUNT],
-    selected_history_id: Option<i64>,
+    selected_history_ids: BTreeSet<i64>,
     counted_pressed_inputs: HashMap<PhysicalInputKey, Lane>,
     pressed_since: HashMap<PhysicalInputKey, PressSampleStart>,
     release_samples: VecDeque<ReleaseSample>,
@@ -39,7 +39,7 @@ impl Default for PlayAnalysisPanelState {
             started_at_unix: unix_now(),
             daily_press_day: local_day_key(),
             daily_lane_presses: [0; bmz_core::lane::LANE_COUNT],
-            selected_history_id: None,
+            selected_history_ids: BTreeSet::new(),
             counted_pressed_inputs: HashMap::new(),
             pressed_since: HashMap::new(),
             release_samples: VecDeque::new(),
@@ -80,6 +80,7 @@ struct ReleaseSample {
 #[derive(Debug, Clone)]
 struct HistoryDisplayRow {
     local_day: String,
+    local_minute: String,
     entry: crate::storage::score_db::ScoreHistoryEntry,
     title: String,
     difficulty: String,
@@ -390,12 +391,20 @@ fn build_tweet_view(
     }
 
     let tweet = build_achievement_tweet(state, config, score_db, library_db, difficulty_tables);
-    if ui.button("ツイート画面を開く").clicked() {
-        let url = format!("https://twitter.com/intent/tweet?text={}", percent_encode_query(&tweet));
-        state.tweet_status = match webbrowser::open(&url) {
-            Ok(_) => "ブラウザでツイート画面を開きました。".to_string(),
-            Err(error) => format!("ブラウザを開けませんでした: {error}"),
-        };
+    let selected_history = selected_tweet_history(state, score_db);
+    let selected_tweet =
+        build_selected_achievement_tweet(config, library_db, difficulty_tables, &selected_history);
+    ui.horizontal(|ui| {
+        if ui.button("本日のサマリをツイート").clicked() {
+            state.tweet_status = open_tweet_window(&tweet);
+        }
+        let selected_button = egui::Button::new("選択範囲のサマリをツイート");
+        if ui.add_enabled(!selected_history.is_empty(), selected_button).clicked() {
+            state.tweet_status = open_tweet_window(&selected_tweet);
+        }
+    });
+    if !selected_history.is_empty() {
+        ui.small(format!("履歴で選択中: {}件", selected_history.len()));
     }
     if !state.tweet_status.is_empty() {
         ui.small(&state.tweet_status);
@@ -437,6 +446,14 @@ fn build_tweet_view(
     changed
 }
 
+fn open_tweet_window(tweet: &str) -> String {
+    let url = format!("https://twitter.com/intent/tweet?text={}", percent_encode_query(tweet));
+    match webbrowser::open(&url) {
+        Ok(_) => "ブラウザでツイート画面を開きました。".to_string(),
+        Err(error) => format!("ブラウザを開けませんでした: {error}"),
+    }
+}
+
 fn build_achievement_tweet(
     state: &PlayAnalysisPanelState,
     config: &PlayAnalysisConfig,
@@ -445,17 +462,56 @@ fn build_achievement_tweet(
     difficulty_tables: &[DifficultyTableRecord],
 ) -> String {
     let history = score_db.local_history_since(state.started_at_unix).unwrap_or_default();
+    build_achievement_tweet_from_history(
+        config,
+        Some(score_db),
+        library_db,
+        difficulty_tables,
+        &history,
+        Some(state.started_at.elapsed().as_secs()),
+        "uptime",
+        true,
+    )
+}
+
+fn build_selected_achievement_tweet(
+    config: &PlayAnalysisConfig,
+    library_db: &crate::storage::library_db::LibraryDatabase,
+    difficulty_tables: &[DifficultyTableRecord],
+    history: &[crate::storage::score_db::ScoreHistoryEntry],
+) -> String {
+    build_achievement_tweet_from_history(
+        config,
+        None,
+        library_db,
+        difficulty_tables,
+        history,
+        selected_history_span_secs(history),
+        "span",
+        false,
+    )
+}
+
+fn build_achievement_tweet_from_history(
+    config: &PlayAnalysisConfig,
+    score_db: Option<&crate::storage::score_db::ScoreDatabase>,
+    library_db: &crate::storage::library_db::LibraryDatabase,
+    difficulty_tables: &[DifficultyTableRecord],
+    history: &[crate::storage::score_db::ScoreHistoryEntry],
+    pace_seconds: Option<u64>,
+    time_label: &str,
+    include_monthly_notes: bool,
+) -> String {
     let plays = history.len() as u64;
     let notes = history.iter().map(|entry| u64::from(entry.total_notes)).sum::<u64>();
     let ex_score = history.iter().map(|entry| u64::from(entry.ex_score)).sum::<u64>();
     let rate = if notes > 0 { ex_score as f64 * 100.0 / (notes as f64 * 2.0) } else { 0.0 };
-    let uptime = state.started_at.elapsed();
-    let pace =
-        if uptime.as_secs() > 0 { notes as f64 * 3600.0 / uptime.as_secs_f64() } else { 0.0 };
 
     let mut lines = vec![format!("plays:{plays}, notes: {}, {:.2}%", format_u64(notes), rate)];
-    if let Some(month) =
-        score_db.monthly_note_counts(1).ok().and_then(|rows| rows.into_iter().next())
+    if include_monthly_notes
+        && let Some(month) = score_db
+            .and_then(|db| db.monthly_note_counts(1).ok())
+            .and_then(|rows| rows.into_iter().next())
     {
         lines.push(format!(
             "({}: {})",
@@ -463,14 +519,40 @@ fn build_achievement_tweet(
             format_u64(month.total_notes)
         ));
     }
-    lines.push(format!(
-        "uptime: {}, pace: {}notes/h",
-        format_duration_hms(uptime.as_secs()),
-        format_u64(pace.round().max(0.0) as u64)
-    ));
-    lines.extend(lamp_update_lines(&history, config, library_db, difficulty_tables));
+    if let Some(seconds) = pace_seconds {
+        let pace = if seconds > 0 { notes as f64 * 3600.0 / seconds as f64 } else { 0.0 };
+        lines.push(format!(
+            "{time_label}: {}, pace: {}notes/h",
+            format_duration_hms(seconds),
+            format_u64(pace.round().max(0.0) as u64)
+        ));
+    }
+    lines.extend(lamp_update_lines(history, config, library_db, difficulty_tables));
     lines.push("#bmz_player".to_string());
     lines.join("\n")
+}
+
+fn selected_history_span_secs(
+    history: &[crate::storage::score_db::ScoreHistoryEntry],
+) -> Option<u64> {
+    let min = history.iter().map(|entry| entry.played_at).min()?;
+    let max = history.iter().map(|entry| entry.played_at).max()?;
+    Some((max - min).max(1) as u64)
+}
+
+fn selected_tweet_history(
+    state: &PlayAnalysisPanelState,
+    score_db: &crate::storage::score_db::ScoreDatabase,
+) -> Vec<crate::storage::score_db::ScoreHistoryEntry> {
+    if state.selected_history_ids.is_empty() {
+        return Vec::new();
+    }
+    score_db
+        .recent_history(200, 0)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|entry| state.selected_history_ids.contains(&entry.id))
+        .collect()
 }
 
 fn lamp_update_lines(
@@ -781,10 +863,14 @@ fn build_history_view(
             for (day, day_rows) in by_day.iter().rev() {
                 egui::CollapsingHeader::new(day).default_open(true).show(ui, |ui| {
                     for row in day_rows {
-                        let selected = state.selected_history_id == Some(row.entry.id);
+                        let selected = state.selected_history_ids.contains(&row.entry.id);
                         let response = ui.selectable_label(selected, history_row_label(row));
                         if response.clicked() {
-                            state.selected_history_id = Some(row.entry.id);
+                            if selected {
+                                state.selected_history_ids.remove(&row.entry.id);
+                            } else {
+                                state.selected_history_ids.insert(row.entry.id);
+                            }
                         }
                     }
                 });
@@ -792,16 +878,38 @@ fn build_history_view(
         });
 
         columns[1].heading("リザルト詳細");
-        let selected = state
-            .selected_history_id
-            .and_then(|id| rows.iter().find(|row| row.entry.id == id))
-            .or_else(|| rows.first());
-        if let Some(row) = selected {
-            build_history_detail(&mut columns[1], row);
-        } else {
-            columns[1].label("履歴がありません。");
+        let selected = rows
+            .iter()
+            .filter(|row| state.selected_history_ids.contains(&row.entry.id))
+            .collect::<Vec<_>>();
+        match selected.as_slice() {
+            [row] => build_history_detail(&mut columns[1], row),
+            [] if rows.is_empty() => {
+                columns[1].label("履歴がありません。");
+            }
+            [] => {
+                columns[1].label("履歴を選択してください。");
+            }
+            rows => build_history_selection_summary(&mut columns[1], rows),
         }
     });
+}
+
+fn build_history_selection_summary(ui: &mut egui::Ui, rows: &[&HistoryDisplayRow]) {
+    let notes = rows.iter().map(|row| u64::from(row.entry.total_notes)).sum::<u64>();
+    let ex_score = rows.iter().map(|row| u64::from(row.entry.ex_score)).sum::<u64>();
+    let bp = rows.iter().map(|row| u64::from(row.entry.bp)).sum::<u64>();
+    let rate = if notes > 0 { ex_score as f64 * 100.0 / (notes as f64 * 2.0) } else { 0.0 };
+    ui.heading(format!("{}件選択中", rows.len()));
+    two_col(ui, "ノーツ", format_u64(notes));
+    two_col(ui, "スコア", format!("{} ({rate:.2}%)", format_u64(ex_score)));
+    two_col(ui, "ミスカウント", format_u64(bp));
+    if let (Some(first), Some(last)) = (
+        rows.iter().min_by_key(|row| row.entry.played_at),
+        rows.iter().max_by_key(|row| row.entry.played_at),
+    ) {
+        two_col(ui, "範囲", format!("{} - {}", first.local_minute, last.local_minute));
+    }
 }
 
 fn load_history_rows(
@@ -829,7 +937,13 @@ fn load_history_rows(
                 .unwrap_or_default();
             let title =
                 chart.map(|chart| chart.title).unwrap_or_else(|| table.chars().take(12).collect());
-            HistoryDisplayRow { local_day: day_entry.local_day, entry, title, difficulty }
+            HistoryDisplayRow {
+                local_day: day_entry.local_day,
+                local_minute: day_entry.local_minute,
+                entry,
+                title,
+                difficulty,
+            }
         })
         .collect()
 }
@@ -837,8 +951,8 @@ fn load_history_rows(
 fn history_row_label(row: &HistoryDisplayRow) -> egui::WidgetText {
     let rate = score_rate(row.entry.ex_score, row.entry.total_notes);
     let text = format!(
-        "{:<5}  ●  {}  {} ({:.2}%)  BP{}",
-        row.difficulty, row.title, row.entry.ex_score, rate, row.entry.bp
+        "{:<5}  ●  {}  {} ({:.2}%)  BP{}  {}",
+        row.difficulty, row.title, row.entry.ex_score, rate, row.entry.bp, row.local_minute
     );
     egui::RichText::new(text).color(clear_color(&row.entry.clear_type)).into()
 }
@@ -860,6 +974,7 @@ fn build_history_detail(ui: &mut egui::Ui, row: &HistoryDisplayRow) {
     two_col(ui, "コンボ", row.entry.max_combo.to_string());
     two_col(ui, "CB", row.entry.cb.to_string());
     two_col(ui, "ノーツ", row.entry.total_notes.to_string());
+    two_col(ui, "日時", row.local_minute.clone());
     two_col(ui, "ゲージ", row.entry.gauge_value.map_or("-".to_string(), |v| format!("{v:.2}%")));
     two_col(ui, "入力", format!("{:?}", row.entry.device_type));
     two_col(ui, "保存元", row.entry.source_kind.as_str().to_string());
@@ -886,7 +1001,7 @@ fn build_controller_view(
         config.release_ng_threshold_ms = config.release_ok_threshold_ms;
         changed = true;
     }
-    ui.horizontal_wrapped(|ui| {
+    ui.horizontal(|ui| {
         ui.label("LN無視しきい値");
         changed |= ui
             .add(
@@ -903,6 +1018,8 @@ fn build_controller_view(
                     .suffix(" ms"),
             )
             .changed();
+    });
+    ui.horizontal(|ui| {
         ui.label("release-OK");
         let ok_changed = ui
             .add(
@@ -926,7 +1043,10 @@ fn build_controller_view(
             config.release_ng_threshold_ms = config.release_ok_threshold_ms;
         }
         changed |= ok_changed || ng_changed;
-        egui::ComboBox::from_label("モード")
+    });
+    ui.horizontal(|ui| {
+        ui.label("モード");
+        egui::ComboBox::from_id_salt("play_analysis_controller_mode")
             .selected_text(controller_mode_label(config.controller_mode))
             .show_ui(ui, |ui| {
                 changed |= ui
@@ -951,7 +1071,8 @@ fn build_controller_view(
                     )
                     .changed();
             });
-        egui::ComboBox::from_label("表示")
+        ui.label("表示");
+        egui::ComboBox::from_id_salt("play_analysis_release_display_mode")
             .selected_text(release_display_mode_label(config.release_display_mode))
             .show_ui(ui, |ui| {
                 changed |= ui

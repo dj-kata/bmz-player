@@ -513,6 +513,7 @@ pub struct ScoreHistoryEntry {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScoreHistoryDayEntry {
     pub local_day: String,
+    pub local_minute: String,
     pub entry: ScoreHistoryEntry,
 }
 
