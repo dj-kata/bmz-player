@@ -38,7 +38,7 @@ use crate::config::profile_config::{
 };
 use crate::i18n::{AppLocale, FluentArgs, Localizer};
 use crate::ln_policy::LnPolicySetting;
-use crate::logging::{LogBuffer, LogEntry, LogLevel as TracingLogLevel};
+use crate::logging::{LogEntry, LogLevel as TracingLogLevel};
 use crate::paths::{AppPaths, resolve_app_paths};
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
 use crate::profile_cmd;

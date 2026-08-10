@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BMZ Play Overlay Compact</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: "Inter", "Segoe UI", sans-serif;
+      background: transparent;
+      --bg: rgba(9, 12, 20, 0.86);
+      --panel: rgba(20, 25, 38, 0.92);
+      --line: rgba(255, 255, 255, 0.16);
+      --text: #f4f7fb;
+      --muted: #8f9caf;
+      --accent: #78d6ff;
+      --press: #89e5ff;
+      --ok: #46d37f;
+      --warn: #f1c94e;
+      --ng: #f05b68;
+    }
+
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+      color: var(--text);
+    }
+
+    .overlay {
+      width: min-content;
+      min-width: 356px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--bg);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    }
+
+    .top {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px 16px;
+      align-items: baseline;
+      margin-bottom: 10px;
+    }
+
+    .title {
+      max-width: 520px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .status {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .metrics {
+      display: flex;
+      gap: 12px;
+      grid-column: 1 / -1;
+      font-variant-numeric: tabular-nums;
+      color: var(--muted);
+    }
+
+    .metrics strong {
+      color: var(--accent);
+      margin-left: 4px;
+    }
+
+    .lanes {
+      display: flex;
+      gap: 6px;
+      align-items: end;
+    }
+
+    .lane {
+      width: 42px;
+      height: 76px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 4px;
+      padding: 6px 5px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      text-align: center;
+      transition: background 70ms linear, transform 70ms linear, border-color 70ms linear;
+    }
+
+    .lane.pressed {
+      transform: translateY(-3px);
+      border-color: var(--press);
+      background: rgba(81, 183, 224, 0.78);
+    }
+
+    .lane.scratch {
+      width: 54px;
+      border-radius: 24px;
+    }
+
+    .label {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .release {
+      align-self: center;
+      font-size: 20px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .release.empty {
+      color: #5f6b7e;
+    }
+
+    .release.ok {
+      color: var(--ok);
+    }
+
+    .release.warn {
+      color: var(--warn);
+    }
+
+    .release.ng {
+      color: var(--ng);
+    }
+
+    .count {
+      font-size: 13px;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+<body>
+  <main class="overlay">
+    <section class="top">
+      <div class="title" id="title">BMZ Player</div>
+      <div class="status" id="status">connecting...</div>
+      <div class="metrics">
+        <span>notes <strong id="notes">-</strong></span>
+        <span>plays <strong id="plays">-</strong></span>
+        <span>rate <strong id="rate">-</strong></span>
+      </div>
+    </section>
+    <section class="lanes" id="lanes"></section>
+  </main>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const port = params.get("port") || "29470";
+    const ok = Number(params.get("ok") || "60");
+    const ng = Number(params.get("ng") || "80");
+    const statusEl = document.getElementById("status");
+    const titleEl = document.getElementById("title");
+    const notesEl = document.getElementById("notes");
+    const playsEl = document.getElementById("plays");
+    const rateEl = document.getElementById("rate");
+    const lanesEl = document.getElementById("lanes");
+
+    let retryTimer = null;
+
+    function formatNumber(value) {
+      if (value === null || value === undefined) return "-";
+      return Number(value).toLocaleString("en-US");
+    }
+
+    function formatRate(value) {
+      if (value === null || value === undefined) return "-";
+      return `${(Number(value) * 100).toFixed(2)}%`;
+    }
+
+    function releaseClass(value) {
+      if (value === null || value === undefined) return "empty";
+      if (value <= ok) return "ok";
+      if (value <= ng) return "warn";
+      return "ng";
+    }
+
+    function render(payload) {
+      titleEl.textContent = payload.summary?.title || "BMZ Player";
+      notesEl.textContent = formatNumber(payload.summary?.notes);
+      playsEl.textContent = formatNumber(payload.summary?.play_count);
+      rateEl.textContent = formatRate(payload.summary?.score_rate);
+      lanesEl.replaceChildren(...(payload.lanes || []).map((lane) => {
+        const root = document.createElement("div");
+        root.className = `lane ${lane.id.includes("scratch") ? "scratch" : ""} ${lane.pressed ? "pressed" : ""}`;
+        const releaseValue = lane.release_ms;
+        const release = releaseValue === null || releaseValue === undefined
+          ? "---"
+          : String(Math.round(Math.max(0, Math.min(999, releaseValue)))).padStart(3, " ");
+        root.innerHTML = `
+          <div class="label"></div>
+          <div class="release ${releaseClass(releaseValue)}"></div>
+          <div class="count"></div>
+        `;
+        root.querySelector(".label").textContent = lane.label;
+        root.querySelector(".release").textContent = release;
+        root.querySelector(".count").textContent = formatNumber(lane.total_presses);
+        return root;
+      }));
+    }
+
+    function connect() {
+      clearTimeout(retryTimer);
+      statusEl.textContent = "connecting...";
+      const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+      ws.addEventListener("open", () => {
+        statusEl.textContent = `ws:${port}`;
+      });
+      ws.addEventListener("message", (event) => {
+        try {
+          render(JSON.parse(event.data));
+        } catch (error) {
+          console.warn("invalid BMZ overlay payload", error);
+        }
+      });
+      ws.addEventListener("close", () => {
+        statusEl.textContent = "offline";
+        retryTimer = setTimeout(connect, 1000);
+      });
+      ws.addEventListener("error", () => {
+        ws.close();
+      });
+    }
+
+    connect();
+  </script>
+</body>
+</html>

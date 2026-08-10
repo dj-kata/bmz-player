@@ -43,6 +43,10 @@ pub struct PlayAnalysisConfig {
     pub open_on_startup: bool,
     #[serde(default)]
     pub compact_mode: bool,
+    #[serde(default)]
+    pub websocket_enabled: bool,
+    #[serde(default = "default_play_analysis_websocket_port")]
+    pub websocket_port: u16,
     #[serde(default, alias = "window_pos")]
     pub full_window_pos: Option<[f32; 2]>,
     #[serde(default)]
@@ -71,7 +75,8 @@ pub struct PlayAnalysisConfig {
     pub release_display_mode: PlayAnalysisReleaseDisplayModeConfig,
     #[serde(default)]
     pub controller_mode: PlayAnalysisControllerModeConfig,
-    #[serde(default)]
+    /// 旧ツイート機能の互換読み書き用。UI からは使用しない。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tweet_table_sources: Vec<String>,
 }
 
@@ -80,6 +85,8 @@ impl Default for PlayAnalysisConfig {
         Self {
             open_on_startup: false,
             compact_mode: false,
+            websocket_enabled: false,
+            websocket_port: default_play_analysis_websocket_port(),
             full_window_pos: None,
             compact_window_pos: None,
             full_window_size: None,
@@ -97,6 +104,10 @@ impl Default for PlayAnalysisConfig {
             tweet_table_sources: Vec::new(),
         }
     }
+}
+
+pub fn default_play_analysis_websocket_port() -> u16 {
+    29470
 }
 
 pub fn default_play_analysis_release_ignore_threshold_ms() -> u32 {

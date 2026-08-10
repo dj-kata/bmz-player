@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -95,9 +97,6 @@ pub(super) struct PlayAnalysisPanelActions {
 
 pub(super) struct PlayAnalysisPanelContext<'a> {
     pub(super) scene: &'a AppSceneSnapshot,
-    pub(super) score_db: &'a crate::storage::score_db::ScoreDatabase,
-    pub(super) library_db: &'a crate::storage::library_db::LibraryDatabase,
-    pub(super) difficulty_tables: &'a [DifficultyTableRecord],
     pub(super) input_config: &'a ProfileInputConfig,
     pub(super) connected_gamepads: &'a [crate::input::gamepad::ConnectedGamepad],
     pub(super) pressed_controls: &'a [String],
@@ -143,67 +142,16 @@ pub(super) fn build_play_analysis_panel(
                 {
                     actions.save_profile = true;
                 }
-
-                let response = egui::CollapsingHeader::new("現在の状態")
-                    .id_salt("play_analysis_current")
-                    .default_open(config.current_section_open)
-                    .show(ui, |ui| build_current_view(ui, state, panel.scene));
-                actions.save_profile |= sync_section_open(
-                    &mut config.current_section_open,
-                    response.body_response.is_some(),
-                );
-                let response = egui::CollapsingHeader::new("成果ツイート")
-                    .id_salt("play_analysis_tweet")
-                    .default_open(config.tweet_section_open)
-                    .show(ui, |ui| {
-                        actions.save_profile |= build_tweet_view(
-                            ui,
-                            state,
-                            config,
-                            panel.score_db,
-                            panel.library_db,
-                            panel.difficulty_tables,
-                        );
-                    });
-                actions.save_profile |= sync_section_open(
-                    &mut config.tweet_section_open,
-                    response.body_response.is_some(),
-                );
-                let response = egui::CollapsingHeader::new("ノーツ数")
-                    .id_salt("play_analysis_notes")
-                    .default_open(config.notes_section_open)
-                    .show(ui, |ui| {
-                        build_notes_view(ui, state, config, panel.score_db);
-                    });
-                actions.save_profile |= sync_section_open(
-                    &mut config.notes_section_open,
-                    response.body_response.is_some(),
-                );
-                let response = egui::CollapsingHeader::new("コントローラ")
-                    .id_salt("play_analysis_controller")
-                    .default_open(config.controller_section_open)
-                    .show(ui, |ui| {
-                        actions.save_profile |= build_controller_view(
-                            ui,
-                            state,
-                            config,
-                            panel.input_config,
-                            panel.connected_gamepads,
-                            panel.pressed_controls,
-                            panel.pressed_play_inputs,
-                        );
-                    });
-                actions.save_profile |= sync_section_open(
-                    &mut config.controller_section_open,
-                    response.body_response.is_some(),
-                );
-                let response = egui::CollapsingHeader::new("プレー履歴")
-                    .id_salt("play_analysis_history")
-                    .default_open(config.history_section_open)
-                    .show(ui, |ui| build_history_view(ui, state, panel.score_db, panel.library_db));
-                actions.save_profile |= sync_section_open(
-                    &mut config.history_section_open,
-                    response.body_response.is_some(),
+                actions.save_profile |= build_websocket_settings(ui, config);
+                ui.separator();
+                actions.save_profile |= build_controller_view(
+                    ui,
+                    state,
+                    config,
+                    panel.input_config,
+                    panel.connected_gamepads,
+                    panel.pressed_controls,
+                    panel.pressed_play_inputs,
                 );
             });
         }
@@ -227,8 +175,6 @@ fn build_compact_view(
     config: &mut PlayAnalysisConfig,
     panel: &PlayAnalysisPanelContext<'_>,
 ) -> bool {
-    build_today_notes_compact(ui, panel.score_db);
-    ui.separator();
     build_current_lane_pattern(ui, state, panel.scene, LanePatternPresentation::Compact);
     ui.separator();
     let active = resolve_active_inputs(
@@ -249,6 +195,20 @@ fn build_compact_view(
         config.compact_mode = false;
         changed = true;
     }
+    changed
+}
+
+fn build_websocket_settings(ui: &mut egui::Ui, config: &mut PlayAnalysisConfig) -> bool {
+    let mut changed = false;
+    ui.heading("HTML送信");
+    changed |= ui.checkbox(&mut config.websocket_enabled, "WebSocketサーバを起動").changed();
+    ui.horizontal(|ui| {
+        ui.label("ポート");
+        changed |=
+            ui.add(egui::DragValue::new(&mut config.websocket_port).range(1..=65535)).changed();
+        ui.small(format!("ws://127.0.0.1:{}", config.websocket_port));
+    });
+    ui.small("HTML/OBSブラウザソース向けに、入力状態・リリース値・合計打鍵数を送信します。");
     changed
 }
 
