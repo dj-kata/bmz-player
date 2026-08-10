@@ -554,8 +554,8 @@ fn build_selected_achievement_tweet(
         library_db,
         difficulty_tables,
         history,
-        selected_history_span_secs(history),
-        "span",
+        None,
+        "uptime",
         false,
     )
 }
@@ -598,14 +598,6 @@ fn build_achievement_tweet_from_history(
     lines.extend(lamp_update_lines(history, config, library_db, difficulty_tables));
     lines.push("#bmz_player".to_string());
     lines.join("\n")
-}
-
-fn selected_history_span_secs(
-    history: &[crate::storage::score_db::ScoreHistoryEntry],
-) -> Option<u64> {
-    let min = history.iter().map(|entry| entry.played_at).min()?;
-    let max = history.iter().map(|entry| entry.played_at).max()?;
-    Some((max - min).max(1) as u64)
 }
 
 fn selected_tweet_history(
