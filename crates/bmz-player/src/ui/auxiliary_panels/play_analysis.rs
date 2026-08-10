@@ -10,7 +10,8 @@ use bmz_render::snapshot::RenderSnapshot;
 
 use crate::config::play_input::lane_binding_for_key_mode;
 use crate::config::profile_config::{
-    PlayAnalysisConfig, PlayAnalysisControllerModeConfig, ProfileInputConfig,
+    PlayAnalysisConfig, PlayAnalysisControllerModeConfig, PlayAnalysisReleaseDisplayModeConfig,
+    ProfileInputConfig,
 };
 use crate::storage::difficulty_table_db::DifficultyTableRecord;
 
@@ -27,6 +28,7 @@ pub(super) struct PlayAnalysisPanelState {
     pressed_since: HashMap<PhysicalInputKey, PressSampleStart>,
     release_samples: VecDeque<ReleaseSample>,
     last_release_by_lane: [Option<f32>; bmz_core::lane::LANE_COUNT],
+    last_play_lane_pattern: Option<PlayAnalysisLanePattern>,
     tweet_status: String,
 }
 
@@ -42,9 +44,18 @@ impl Default for PlayAnalysisPanelState {
             pressed_since: HashMap::new(),
             release_samples: VecDeque::new(),
             last_release_by_lane: [None; bmz_core::lane::LANE_COUNT],
+            last_play_lane_pattern: None,
             tweet_status: String::new(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct PlayAnalysisLanePattern {
+    key_mode: KeyMode,
+    arrange: String,
+    arrange_2p: String,
+    pattern: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -103,6 +114,7 @@ pub(super) fn build_play_analysis_panel(
     }
 
     state.observe_releases(config, panel.input_config, panel.pressed_play_inputs);
+    state.observe_lane_pattern(panel.scene);
     let mut actions = PlayAnalysisPanelActions::default();
 
     play_analysis_window(ctx, visible).show(ctx, |ui| {
@@ -122,7 +134,7 @@ pub(super) fn build_play_analysis_panel(
 
             egui::CollapsingHeader::new("現在の状態")
                 .default_open(true)
-                .show(ui, |ui| build_current_view(ui, panel.scene));
+                .show(ui, |ui| build_current_view(ui, state, panel.scene));
             egui::CollapsingHeader::new("成果ツイート").default_open(true).show(ui, |ui| {
                 actions.save_profile |= build_tweet_view(
                     ui,
@@ -164,14 +176,16 @@ fn build_compact_view(
 ) -> bool {
     build_today_notes_compact(ui, panel.score_db);
     ui.separator();
-    build_current_lane_pattern(ui, panel.scene);
+    build_current_lane_pattern(ui, state, panel.scene, LanePatternPresentation::Compact);
     ui.separator();
     let active = resolve_active_inputs(
         panel.input_config,
         config.controller_mode,
         panel.pressed_play_inputs,
     );
-    build_controller_layout(ui, state, config, &active);
+    ui.horizontal_centered(|ui| {
+        build_controller_layout(ui, state, config, &active);
+    });
     ui.separator();
     let mut changed = false;
     if ui.button("フルモードに戻る").clicked() {
@@ -265,13 +279,23 @@ fn build_today_notes_compact(
     ui: &mut egui::Ui,
     score_db: &crate::storage::score_db::ScoreDatabase,
 ) {
-    ui.heading("本日のノーツ数");
     match score_db.note_count_today() {
         Ok(row) => {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new(format_u64(row.total_notes)).strong().size(20.0));
+            ui.horizontal_centered(|ui| {
+                ui.label("today:");
+                ui.label(
+                    egui::RichText::new(format_u64(row.total_notes))
+                        .strong()
+                        .color(egui::Color32::from_rgb(120, 210, 255)),
+                );
                 ui.label("notes");
-                ui.label(format!("{} plays", row.play_count));
+                ui.label(",");
+                ui.label(
+                    egui::RichText::new(row.play_count.to_string())
+                        .strong()
+                        .color(egui::Color32::from_rgb(120, 210, 255)),
+                );
+                ui.label("plays");
             });
         }
         Err(_) => {
@@ -516,7 +540,7 @@ fn percent_encode_query(value: &str) -> String {
     out
 }
 
-fn build_current_view(ui: &mut egui::Ui, scene: &AppSceneSnapshot) {
+fn build_current_view(ui: &mut egui::Ui, state: &PlayAnalysisPanelState, scene: &AppSceneSnapshot) {
     match scene {
         AppSceneSnapshot::Select(snapshot) => {
             let row = snapshot
@@ -541,19 +565,44 @@ fn build_current_view(ui: &mut egui::Ui, scene: &AppSceneSnapshot) {
                         None,
                     ),
                 );
-                lane_pattern_row(ui, key_mode, &snapshot.lane_shuffle_pattern);
+                build_current_lane_pattern(ui, state, scene, LanePatternPresentation::Full);
             } else {
                 ui.label("選択中の曲がありません。");
             }
         }
         AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
-            build_render_snapshot_current(ui, snapshot);
+            build_render_snapshot_current(ui, state, scene, snapshot);
         }
-        AppSceneSnapshot::Result(snapshot) => build_result_snapshot_current(ui, snapshot),
+        AppSceneSnapshot::Result(snapshot) => {
+            build_result_snapshot_current(ui, state, scene, snapshot)
+        }
     }
 }
 
-fn build_current_lane_pattern(ui: &mut egui::Ui, scene: &AppSceneSnapshot) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LanePatternPresentation {
+    Full,
+    Compact,
+}
+
+fn build_current_lane_pattern(
+    ui: &mut egui::Ui,
+    state: &PlayAnalysisPanelState,
+    scene: &AppSceneSnapshot,
+    presentation: LanePatternPresentation,
+) {
+    if let Some(pattern) = &state.last_play_lane_pattern {
+        lane_pattern_row(
+            ui,
+            pattern.key_mode,
+            &pattern.pattern,
+            &pattern.arrange,
+            &pattern.arrange_2p,
+            presentation,
+        );
+        return;
+    }
+
     match scene {
         AppSceneSnapshot::Select(snapshot) => {
             let row = snapshot
@@ -563,21 +612,47 @@ fn build_current_lane_pattern(ui: &mut egui::Ui, scene: &AppSceneSnapshot) {
                 .or_else(|| snapshot.rows.first());
             if let Some(row) = row {
                 let key_mode = row.chart_key_mode.unwrap_or(KeyMode::K7);
-                lane_pattern_row(ui, key_mode, &snapshot.lane_shuffle_pattern);
+                lane_pattern_row(
+                    ui,
+                    key_mode,
+                    &snapshot.lane_shuffle_pattern,
+                    &snapshot.arrange,
+                    &snapshot.arrange_2p,
+                    presentation,
+                );
             } else {
                 ui.label("レーン配置: -");
             }
         }
         AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
-            lane_pattern_row(ui, snapshot.key_mode, &snapshot.lane_shuffle_pattern);
+            lane_pattern_row(
+                ui,
+                snapshot.key_mode,
+                &snapshot.lane_shuffle_pattern,
+                &snapshot.arrange,
+                &snapshot.arrange_2p,
+                presentation,
+            );
         }
         AppSceneSnapshot::Result(snapshot) => {
-            lane_pattern_row(ui, snapshot.key_mode, &snapshot.lane_shuffle_pattern);
+            lane_pattern_row(
+                ui,
+                snapshot.key_mode,
+                &snapshot.lane_shuffle_pattern,
+                &snapshot.arrange,
+                &snapshot.arrange_2p,
+                presentation,
+            );
         }
     }
 }
 
-fn build_render_snapshot_current(ui: &mut egui::Ui, snapshot: &RenderSnapshot) {
+fn build_render_snapshot_current(
+    ui: &mut egui::Ui,
+    state: &PlayAnalysisPanelState,
+    scene: &AppSceneSnapshot,
+    snapshot: &RenderSnapshot,
+) {
     ui.heading(&snapshot.title);
     two_col(ui, "難易度", difficulty_label(&snapshot.table_text_secondary, &snapshot.play_level));
     two_col(ui, "スコア", snapshot.ex_score.to_string());
@@ -596,10 +671,15 @@ fn build_render_snapshot_current(ui: &mut egui::Ui, snapshot: &RenderSnapshot) {
             None,
         ),
     );
-    lane_pattern_row(ui, snapshot.key_mode, &snapshot.lane_shuffle_pattern);
+    build_current_lane_pattern(ui, state, scene, LanePatternPresentation::Full);
 }
 
-fn build_result_snapshot_current(ui: &mut egui::Ui, snapshot: &ResultSnapshot) {
+fn build_result_snapshot_current(
+    ui: &mut egui::Ui,
+    state: &PlayAnalysisPanelState,
+    scene: &AppSceneSnapshot,
+    snapshot: &ResultSnapshot,
+) {
     ui.heading(&snapshot.title);
     two_col(ui, "難易度", difficulty_label(&snapshot.table_text_secondary, &snapshot.play_level));
     two_col(
@@ -619,7 +699,7 @@ fn build_result_snapshot_current(ui: &mut egui::Ui, snapshot: &ResultSnapshot) {
             Some(&snapshot.double_option),
         ),
     );
-    lane_pattern_row(ui, snapshot.key_mode, &snapshot.lane_shuffle_pattern);
+    build_current_lane_pattern(ui, state, scene, LanePatternPresentation::Full);
 }
 
 fn build_history_view(
@@ -808,6 +888,31 @@ fn build_controller_view(
                     )
                     .changed();
             });
+        egui::ComboBox::from_label("表示")
+            .selected_text(release_display_mode_label(config.release_display_mode))
+            .show_ui(ui, |ui| {
+                changed |= ui
+                    .selectable_value(
+                        &mut config.release_display_mode,
+                        PlayAnalysisReleaseDisplayModeConfig::ReleaseOnly,
+                        "リリース時間のみ",
+                    )
+                    .changed();
+                changed |= ui
+                    .selectable_value(
+                        &mut config.release_display_mode,
+                        PlayAnalysisReleaseDisplayModeConfig::ReleaseAndNotes,
+                        "リリース時間&ノーツ数",
+                    )
+                    .changed();
+                changed |= ui
+                    .selectable_value(
+                        &mut config.release_display_mode,
+                        PlayAnalysisReleaseDisplayModeConfig::NotesOnly,
+                        "ノーツ数のみ",
+                    )
+                    .changed();
+            });
     });
     ui.label(format!("平均リリース時間: {}", state.average_release_label()));
 
@@ -831,6 +936,17 @@ fn build_controller_view(
 }
 
 impl PlayAnalysisPanelState {
+    fn observe_lane_pattern(&mut self, scene: &AppSceneSnapshot) {
+        if let AppSceneSnapshot::Play(snapshot) = scene {
+            self.last_play_lane_pattern = Some(PlayAnalysisLanePattern {
+                key_mode: snapshot.key_mode,
+                arrange: snapshot.arrange.clone(),
+                arrange_2p: snapshot.arrange_2p.clone(),
+                pattern: snapshot.lane_shuffle_pattern.clone(),
+            });
+        }
+    }
+
     fn observe_releases(
         &mut self,
         config: &PlayAnalysisConfig,
@@ -1169,13 +1285,53 @@ fn release_stroke(config: &PlayAnalysisConfig, release_ms: Option<f32>) -> egui:
     egui::Stroke::new(width, release_color(config, release_ms))
 }
 
-fn release_key_label(release_ms: Option<f32>) -> String {
-    match release_ms {
+fn release_key_text(
+    mode: PlayAnalysisReleaseDisplayModeConfig,
+    release_ms: Option<f32>,
+    note_count: u64,
+    release_color: egui::Color32,
+    note_color: egui::Color32,
+) -> egui::WidgetText {
+    let release = match release_ms {
         Some(value) => {
             let value = value.round().clamp(0.0, 999.0) as u16;
             format!("{value:>3}")
         }
         None => "---".to_string(),
+    };
+    let notes = format!("{:>3}", note_count.min(999));
+    let font_size = release_display_font_size(mode);
+    let release_format = egui::text::TextFormat {
+        font_id: egui::FontId::monospace(font_size),
+        color: release_color,
+        ..Default::default()
+    };
+    let note_format = egui::text::TextFormat {
+        font_id: egui::FontId::monospace(font_size),
+        color: note_color,
+        ..Default::default()
+    };
+    let mut job = egui::text::LayoutJob { halign: egui::Align::Center, ..Default::default() };
+    match mode {
+        PlayAnalysisReleaseDisplayModeConfig::ReleaseOnly => {
+            job.append(&release, 0.0, release_format);
+        }
+        PlayAnalysisReleaseDisplayModeConfig::ReleaseAndNotes => {
+            job.append(&format!("{release}\n"), 0.0, release_format);
+            job.append(&format!("{notes}n"), 0.0, note_format);
+        }
+        PlayAnalysisReleaseDisplayModeConfig::NotesOnly => {
+            job.append(&notes, 0.0, note_format);
+        }
+    }
+    job.into()
+}
+
+fn release_display_font_size(mode: PlayAnalysisReleaseDisplayModeConfig) -> f32 {
+    match mode {
+        PlayAnalysisReleaseDisplayModeConfig::ReleaseOnly => 17.0,
+        PlayAnalysisReleaseDisplayModeConfig::ReleaseAndNotes => 13.0,
+        PlayAnalysisReleaseDisplayModeConfig::NotesOnly => 16.0,
     }
 }
 
@@ -1188,9 +1344,12 @@ fn build_controller_key_button(
 ) {
     let number = display_key_number(KeyMode::K14, lane).unwrap_or(0);
     let release_ms = state.lane_release_display_ms(lane);
+    let note_count = state.daily_lane_presses[lane.index()];
     let fill = if active.lanes.contains(&lane) {
         egui::Color32::from_rgb(130, 220, 255)
-    } else if release_ms.is_none() {
+    } else if release_ms.is_none()
+        && config.release_display_mode != PlayAnalysisReleaseDisplayModeConfig::NotesOnly
+    {
         egui::Color32::from_gray(55)
     } else if matches!(number, 2 | 4 | 6) {
         egui::Color32::from_rgb(0, 60, 150)
@@ -1198,16 +1357,23 @@ fn build_controller_key_button(
         egui::Color32::from_rgb(235, 238, 244)
     };
     let value_color = release_color(config, release_ms);
-    let text_color = if release_ms.is_some() { value_color } else { egui::Color32::from_gray(150) };
+    let release_text_color =
+        if release_ms.is_some() { value_color } else { egui::Color32::from_gray(150) };
+    let note_text_color = if matches!(number, 2 | 4 | 6) {
+        egui::Color32::WHITE
+    } else {
+        egui::Color32::from_gray(25)
+    };
     let stroke = release_stroke(config, release_ms);
     ui.add_sized(
         [52.0, 48.0],
-        egui::Button::new(
-            egui::RichText::new(release_key_label(release_ms))
-                .monospace()
-                .size(17.0)
-                .color(text_color),
-        )
+        egui::Button::new(release_key_text(
+            config.release_display_mode,
+            release_ms,
+            note_count,
+            release_text_color,
+            note_text_color,
+        ))
         .fill(fill)
         .stroke(stroke),
     );
@@ -1342,6 +1508,14 @@ fn controller_mode_label(mode: PlayAnalysisControllerModeConfig) -> &'static str
     }
 }
 
+fn release_display_mode_label(mode: PlayAnalysisReleaseDisplayModeConfig) -> &'static str {
+    match mode {
+        PlayAnalysisReleaseDisplayModeConfig::ReleaseOnly => "リリース時間のみ",
+        PlayAnalysisReleaseDisplayModeConfig::ReleaseAndNotes => "リリース時間&ノーツ数",
+        PlayAnalysisReleaseDisplayModeConfig::NotesOnly => "ノーツ数のみ",
+    }
+}
+
 fn note_count_display_lanes(mode: PlayAnalysisControllerModeConfig) -> &'static [Lane] {
     match mode {
         PlayAnalysisControllerModeConfig::Key7P1 | PlayAnalysisControllerModeConfig::Key7P2 => &[
@@ -1424,20 +1598,40 @@ fn two_col(ui: &mut egui::Ui, label: &str, value: String) {
     });
 }
 
-fn lane_pattern_row(ui: &mut egui::Ui, key_mode: KeyMode, pattern: &[u8]) {
+fn lane_pattern_row(
+    ui: &mut egui::Ui,
+    key_mode: KeyMode,
+    pattern: &[u8],
+    arrange: &str,
+    arrange_2p: &str,
+    presentation: LanePatternPresentation,
+) {
+    let disabled_label = lane_pattern_disabled_label(key_mode, pattern, arrange, arrange_2p);
+    if presentation == LanePatternPresentation::Compact {
+        ui.horizontal_centered(|ui| {
+            build_lane_pattern_view(ui, key_mode, pattern, disabled_label.as_deref());
+        });
+        return;
+    }
+
     let label = egui::RichText::new("レーン配置").color(egui::Color32::from_gray(150));
     if ui.available_width() < 430.0 {
         ui.label(label);
-        build_lane_pattern_view(ui, key_mode, pattern);
+        build_lane_pattern_view(ui, key_mode, pattern, disabled_label.as_deref());
     } else {
         ui.horizontal(|ui| {
             ui.add_sized([96.0, 20.0], egui::Label::new(label));
-            build_lane_pattern_view(ui, key_mode, pattern);
+            build_lane_pattern_view(ui, key_mode, pattern, disabled_label.as_deref());
         });
     }
 }
 
-fn build_lane_pattern_view(ui: &mut egui::Ui, key_mode: KeyMode, pattern: &[u8]) {
+fn build_lane_pattern_view(
+    ui: &mut egui::Ui,
+    key_mode: KeyMode,
+    pattern: &[u8],
+    disabled_label: Option<&str>,
+) {
     let key_lanes = key_mode
         .active_lanes()
         .iter()
@@ -1449,7 +1643,7 @@ fn build_lane_pattern_view(ui: &mut egui::Ui, key_mode: KeyMode, pattern: &[u8])
         ((ui.available_width() - (lane_count - 1.0) * 4.0) / lane_count).clamp(24.0, 42.0);
     let button_height = if button_width < 34.0 { 52.0 } else { 64.0 };
     let text_size = if button_width < 34.0 { 16.0 } else { 20.0 };
-    ui.horizontal(|ui| {
+    let response = ui.horizontal(|ui| {
         for (index, lane) in key_lanes.iter().copied().enumerate() {
             ui.push_id(("play_analysis_lane_pattern", index), |ui| {
                 let label = lane_pattern_display_label(key_mode, pattern, lane);
@@ -1457,22 +1651,96 @@ fn build_lane_pattern_view(ui: &mut egui::Ui, key_mode: KeyMode, pattern: &[u8])
                     .is_some_and(|number| matches!(number, 2 | 4 | 6));
                 ui.add_sized(
                     [button_width, button_height],
-                    lane_pattern_button(label, is_blue, text_size),
+                    lane_pattern_button(label, is_blue, text_size, disabled_label.is_some()),
                 )
                 .on_hover_text(format!("display lane {}", index + 1));
             });
         }
     });
+    if let Some(label) = disabled_label {
+        ui.painter().text(
+            response.response.rect.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::proportional(18.0),
+            egui::Color32::from_rgba_unmultiplied(255, 92, 92, 150),
+        );
+    }
 }
 
-fn lane_pattern_button(label: String, is_blue: bool, text_size: f32) -> egui::Button<'static> {
-    let fill = if is_blue {
+fn lane_pattern_button(
+    label: String,
+    is_blue: bool,
+    text_size: f32,
+    disabled: bool,
+) -> egui::Button<'static> {
+    let fill = if disabled {
+        egui::Color32::from_gray(76)
+    } else if is_blue {
         egui::Color32::from_rgb(0, 60, 150)
     } else {
         egui::Color32::from_rgb(235, 238, 244)
     };
-    let text_color = if is_blue { egui::Color32::WHITE } else { egui::Color32::from_gray(35) };
+    let text_color = if disabled {
+        egui::Color32::from_gray(120)
+    } else if is_blue {
+        egui::Color32::WHITE
+    } else {
+        egui::Color32::from_gray(35)
+    };
     egui::Button::new(egui::RichText::new(label).size(text_size).color(text_color)).fill(fill)
+}
+
+fn lane_pattern_disabled_label(
+    key_mode: KeyMode,
+    pattern: &[u8],
+    arrange: &str,
+    arrange_2p: &str,
+) -> Option<String> {
+    let labels = lane_pattern_arrange_labels(key_mode, arrange, arrange_2p);
+    if let Some(label) = labels.iter().find(|label| !arrange_has_fixed_lane_pattern(label)) {
+        return Some((*label).to_string());
+    }
+    if !pattern_has_fixed_lane_pattern(key_mode, pattern) {
+        return labels.first().map(|label| (*label).to_string());
+    }
+    None
+}
+
+fn lane_pattern_arrange_labels<'a>(
+    key_mode: KeyMode,
+    arrange: &'a str,
+    arrange_2p: &'a str,
+) -> Vec<&'a str> {
+    match key_mode {
+        KeyMode::K10 | KeyMode::K14 => vec![arrange, arrange_2p],
+        _ => vec![arrange],
+    }
+}
+
+fn arrange_has_fixed_lane_pattern(arrange: &str) -> bool {
+    matches!(
+        arrange.trim().to_ascii_uppercase().as_str(),
+        "" | "NORMAL" | "MIRROR" | "RANDOM" | "R-RANDOM" | "SPIRAL"
+    )
+}
+
+fn pattern_has_fixed_lane_pattern(key_mode: KeyMode, pattern: &[u8]) -> bool {
+    if pattern.is_empty() {
+        return true;
+    }
+    key_mode
+        .active_lanes()
+        .iter()
+        .copied()
+        .filter(|lane| !matches!(lane, Lane::Scratch | Lane::Scratch2))
+        .all(|lane| {
+            pattern
+                .get(lane.index())
+                .copied()
+                .and_then(|source| Lane::ALL.get(usize::from(source)))
+                .is_some()
+        })
 }
 
 fn lane_pattern_display_label(key_mode: KeyMode, pattern: &[u8], display_lane: Lane) -> String {

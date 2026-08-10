@@ -52,6 +52,8 @@ pub struct PlayAnalysisConfig {
     #[serde(default = "default_play_analysis_release_ng_threshold_ms")]
     pub release_ng_threshold_ms: u32,
     #[serde(default)]
+    pub release_display_mode: PlayAnalysisReleaseDisplayModeConfig,
+    #[serde(default)]
     pub controller_mode: PlayAnalysisControllerModeConfig,
     #[serde(default)]
     pub tweet_table_sources: Vec<String>,
@@ -66,6 +68,7 @@ impl Default for PlayAnalysisConfig {
             release_window_ms: default_play_analysis_release_window_ms(),
             release_ok_threshold_ms: default_play_analysis_release_ok_threshold_ms(),
             release_ng_threshold_ms: default_play_analysis_release_ng_threshold_ms(),
+            release_display_mode: PlayAnalysisReleaseDisplayModeConfig::default(),
             controller_mode: PlayAnalysisControllerModeConfig::default(),
             tweet_table_sources: Vec::new(),
         }
@@ -86,6 +89,15 @@ pub fn default_play_analysis_release_ok_threshold_ms() -> u32 {
 
 pub fn default_play_analysis_release_ng_threshold_ms() -> u32 {
     80
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum PlayAnalysisReleaseDisplayModeConfig {
+    #[default]
+    ReleaseOnly,
+    ReleaseAndNotes,
+    NotesOnly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
