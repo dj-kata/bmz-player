@@ -43,6 +43,8 @@ pub struct PlayAnalysisConfig {
     pub open_on_startup: bool,
     #[serde(default)]
     pub compact_mode: bool,
+    #[serde(default)]
+    pub window_pos: Option<[f32; 2]>,
     #[serde(default = "default_play_analysis_release_ignore_threshold_ms")]
     pub release_ignore_threshold_ms: u32,
     #[serde(default = "default_play_analysis_release_window_ms")]
@@ -64,6 +66,7 @@ impl Default for PlayAnalysisConfig {
         Self {
             open_on_startup: false,
             compact_mode: false,
+            window_pos: None,
             release_ignore_threshold_ms: default_play_analysis_release_ignore_threshold_ms(),
             release_window_ms: default_play_analysis_release_window_ms(),
             release_ok_threshold_ms: default_play_analysis_release_ok_threshold_ms(),

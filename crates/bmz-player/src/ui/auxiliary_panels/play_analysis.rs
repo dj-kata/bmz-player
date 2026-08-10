@@ -117,56 +117,62 @@ pub(super) fn build_play_analysis_panel(
     state.observe_lane_pattern(panel.scene);
     let mut actions = PlayAnalysisPanelActions::default();
 
-    play_analysis_window(ctx, visible, config.compact_mode, config.controller_mode).show(
+    let window_id = play_analysis_window_id(config.compact_mode);
+    play_analysis_window(
         ctx,
-        |ui| {
-            if config.compact_mode {
-                actions.save_profile |= build_compact_view(ui, state, config, &panel);
-            } else {
-                let max_height = ui.available_rect_before_wrap().height().max(64.0);
-                egui::ScrollArea::vertical().max_height(max_height).show(ui, |ui| {
-                    if ui.checkbox(&mut config.compact_mode, "コンパクトモード").changed() {
-                        actions.save_profile = true;
-                    }
-                    if ui.checkbox(&mut config.open_on_startup, "起動時に自動で開く").changed()
-                    {
-                        actions.save_profile = true;
-                    }
+        visible,
+        config.compact_mode,
+        config.controller_mode,
+        config.window_pos,
+    )
+    .show(ctx, |ui| {
+        if config.compact_mode {
+            actions.save_profile |= build_compact_view(ui, state, config, &panel);
+        } else {
+            let max_height = ui.available_rect_before_wrap().height().max(64.0);
+            egui::ScrollArea::vertical().max_height(max_height).show(ui, |ui| {
+                if ui.checkbox(&mut config.compact_mode, "コンパクトモード").changed() {
+                    actions.save_profile = true;
+                }
+                if ui.checkbox(&mut config.open_on_startup, "起動時に自動で開く").changed()
+                {
+                    actions.save_profile = true;
+                }
 
-                    egui::CollapsingHeader::new("現在の状態")
-                        .default_open(true)
-                        .show(ui, |ui| build_current_view(ui, state, panel.scene));
-                    egui::CollapsingHeader::new("成果ツイート").default_open(true).show(ui, |ui| {
-                        actions.save_profile |= build_tweet_view(
-                            ui,
-                            state,
-                            config,
-                            panel.score_db,
-                            panel.library_db,
-                            panel.difficulty_tables,
-                        );
-                    });
-                    egui::CollapsingHeader::new("ノーツ数").default_open(true).show(ui, |ui| {
-                        build_notes_view(ui, state, config, panel.score_db);
-                    });
-                    egui::CollapsingHeader::new("コントローラ").default_open(true).show(ui, |ui| {
-                        actions.save_profile |= build_controller_view(
-                            ui,
-                            state,
-                            config,
-                            panel.input_config,
-                            panel.connected_gamepads,
-                            panel.pressed_controls,
-                            panel.pressed_play_inputs,
-                        );
-                    });
-                    egui::CollapsingHeader::new("プレー履歴").default_open(true).show(ui, |ui| {
-                        build_history_view(ui, state, panel.score_db, panel.library_db)
-                    });
+                egui::CollapsingHeader::new("現在の状態")
+                    .default_open(true)
+                    .show(ui, |ui| build_current_view(ui, state, panel.scene));
+                egui::CollapsingHeader::new("成果ツイート").default_open(true).show(ui, |ui| {
+                    actions.save_profile |= build_tweet_view(
+                        ui,
+                        state,
+                        config,
+                        panel.score_db,
+                        panel.library_db,
+                        panel.difficulty_tables,
+                    );
                 });
-            }
-        },
-    );
+                egui::CollapsingHeader::new("ノーツ数").default_open(true).show(ui, |ui| {
+                    build_notes_view(ui, state, config, panel.score_db);
+                });
+                egui::CollapsingHeader::new("コントローラ").default_open(true).show(ui, |ui| {
+                    actions.save_profile |= build_controller_view(
+                        ui,
+                        state,
+                        config,
+                        panel.input_config,
+                        panel.connected_gamepads,
+                        panel.pressed_controls,
+                        panel.pressed_play_inputs,
+                    );
+                });
+                egui::CollapsingHeader::new("プレー履歴")
+                    .default_open(true)
+                    .show(ui, |ui| build_history_view(ui, state, panel.score_db, panel.library_db));
+            });
+        }
+    });
+    actions.save_profile |= sync_play_analysis_window_pos(ctx, config, window_id);
 
     actions
 }
@@ -218,21 +224,27 @@ fn play_analysis_window<'open>(
     visible: &'open mut bool,
     compact: bool,
     controller_mode: PlayAnalysisControllerModeConfig,
+    saved_pos: Option<[f32; 2]>,
 ) -> egui::Window<'open> {
     let constrain = ctx.content_rect().shrink(PANEL_VIEWPORT_MARGIN);
     let chrome = panel_window_chrome(ctx);
-    let (width, height, window_id) = if compact {
+    let (width, height) = if compact {
         let width =
             if controller_mode == PlayAnalysisControllerModeConfig::Key14 { 640.0 } else { 360.0 };
-        (width, 226.0, egui::Id::new("bmz_play_analysis_compact_v2"))
+        (width, 226.0)
     } else {
-        (520.0, 760.0, egui::Id::new("bmz_play_analysis_v3"))
+        (520.0, 760.0)
     };
+    let window_id = play_analysis_window_id(compact);
     let (default_inner, max_inner, clamped_default_pos) =
         clamp_panel_layout(constrain, chrome, width, height, egui::pos2(96.0, 48.0));
+    let saved_pos = saved_pos.map(|[x, y]| egui::pos2(x, y)).map(|pos| {
+        constrain_window_rect_to_area(egui::Rect::from_min_size(pos, default_inner), constrain).min
+    });
     let pos = ctx
         .memory(|memory| memory.area_rect(window_id))
         .map(|rect| constrain_window_rect_to_area(rect, constrain).min)
+        .or(saved_pos)
         .unwrap_or(clamped_default_pos);
     let mut window = egui::Window::new("プレー分析 (F7)")
         .id(window_id)
@@ -248,6 +260,33 @@ fn play_analysis_window<'open>(
         window = window.resizable(true);
     }
     window
+}
+
+fn play_analysis_window_id(compact: bool) -> egui::Id {
+    if compact {
+        egui::Id::new("bmz_play_analysis_compact_v2")
+    } else {
+        egui::Id::new("bmz_play_analysis_v3")
+    }
+}
+
+fn sync_play_analysis_window_pos(
+    ctx: &egui::Context,
+    config: &mut PlayAnalysisConfig,
+    window_id: egui::Id,
+) -> bool {
+    let Some(rect) = ctx.memory(|memory| memory.area_rect(window_id)) else {
+        return false;
+    };
+    let pos = [rect.min.x, rect.min.y];
+    if config
+        .window_pos
+        .is_some_and(|saved| (saved[0] - pos[0]).abs() < 0.5 && (saved[1] - pos[1]).abs() < 0.5)
+    {
+        return false;
+    }
+    config.window_pos = Some(pos);
+    true
 }
 
 fn build_notes_view(
