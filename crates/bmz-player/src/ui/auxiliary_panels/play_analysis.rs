@@ -144,42 +144,81 @@ pub(super) fn build_play_analysis_panel(
                     actions.save_profile = true;
                 }
 
-                egui::CollapsingHeader::new("現在の状態")
-                    .default_open(true)
+                let response = egui::CollapsingHeader::new("現在の状態")
+                    .id_salt("play_analysis_current")
+                    .default_open(config.current_section_open)
                     .show(ui, |ui| build_current_view(ui, state, panel.scene));
-                egui::CollapsingHeader::new("成果ツイート").default_open(true).show(ui, |ui| {
-                    actions.save_profile |= build_tweet_view(
-                        ui,
-                        state,
-                        config,
-                        panel.score_db,
-                        panel.library_db,
-                        panel.difficulty_tables,
-                    );
-                });
-                egui::CollapsingHeader::new("ノーツ数").default_open(true).show(ui, |ui| {
-                    build_notes_view(ui, state, config, panel.score_db);
-                });
-                egui::CollapsingHeader::new("コントローラ").default_open(true).show(ui, |ui| {
-                    actions.save_profile |= build_controller_view(
-                        ui,
-                        state,
-                        config,
-                        panel.input_config,
-                        panel.connected_gamepads,
-                        panel.pressed_controls,
-                        panel.pressed_play_inputs,
-                    );
-                });
-                egui::CollapsingHeader::new("プレー履歴")
-                    .default_open(true)
+                actions.save_profile |= sync_section_open(
+                    &mut config.current_section_open,
+                    response.body_response.is_some(),
+                );
+                let response = egui::CollapsingHeader::new("成果ツイート")
+                    .id_salt("play_analysis_tweet")
+                    .default_open(config.tweet_section_open)
+                    .show(ui, |ui| {
+                        actions.save_profile |= build_tweet_view(
+                            ui,
+                            state,
+                            config,
+                            panel.score_db,
+                            panel.library_db,
+                            panel.difficulty_tables,
+                        );
+                    });
+                actions.save_profile |= sync_section_open(
+                    &mut config.tweet_section_open,
+                    response.body_response.is_some(),
+                );
+                let response = egui::CollapsingHeader::new("ノーツ数")
+                    .id_salt("play_analysis_notes")
+                    .default_open(config.notes_section_open)
+                    .show(ui, |ui| {
+                        build_notes_view(ui, state, config, panel.score_db);
+                    });
+                actions.save_profile |= sync_section_open(
+                    &mut config.notes_section_open,
+                    response.body_response.is_some(),
+                );
+                let response = egui::CollapsingHeader::new("コントローラ")
+                    .id_salt("play_analysis_controller")
+                    .default_open(config.controller_section_open)
+                    .show(ui, |ui| {
+                        actions.save_profile |= build_controller_view(
+                            ui,
+                            state,
+                            config,
+                            panel.input_config,
+                            panel.connected_gamepads,
+                            panel.pressed_controls,
+                            panel.pressed_play_inputs,
+                        );
+                    });
+                actions.save_profile |= sync_section_open(
+                    &mut config.controller_section_open,
+                    response.body_response.is_some(),
+                );
+                let response = egui::CollapsingHeader::new("プレー履歴")
+                    .id_salt("play_analysis_history")
+                    .default_open(config.history_section_open)
                     .show(ui, |ui| build_history_view(ui, state, panel.score_db, panel.library_db));
+                actions.save_profile |= sync_section_open(
+                    &mut config.history_section_open,
+                    response.body_response.is_some(),
+                );
             });
         }
     });
     actions.save_profile |= sync_play_analysis_window_rect(ctx, config, compact, window_id);
 
     actions
+}
+
+fn sync_section_open(saved_open: &mut bool, open: bool) -> bool {
+    if *saved_open == open {
+        return false;
+    }
+    *saved_open = open;
+    true
 }
 
 fn build_compact_view(

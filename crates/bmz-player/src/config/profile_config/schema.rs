@@ -49,6 +49,16 @@ pub struct PlayAnalysisConfig {
     pub compact_window_pos: Option<[f32; 2]>,
     #[serde(default)]
     pub full_window_size: Option<[f32; 2]>,
+    #[serde(default = "default_true")]
+    pub current_section_open: bool,
+    #[serde(default = "default_true")]
+    pub tweet_section_open: bool,
+    #[serde(default = "default_true")]
+    pub notes_section_open: bool,
+    #[serde(default = "default_true")]
+    pub controller_section_open: bool,
+    #[serde(default = "default_true")]
+    pub history_section_open: bool,
     #[serde(default = "default_play_analysis_release_ignore_threshold_ms")]
     pub release_ignore_threshold_ms: u32,
     #[serde(default = "default_play_analysis_release_window_ms")]
@@ -73,6 +83,11 @@ impl Default for PlayAnalysisConfig {
             full_window_pos: None,
             compact_window_pos: None,
             full_window_size: None,
+            current_section_open: true,
+            tweet_section_open: true,
+            notes_section_open: true,
+            controller_section_open: true,
+            history_section_open: true,
             release_ignore_threshold_ms: default_play_analysis_release_ignore_threshold_ms(),
             release_window_ms: default_play_analysis_release_window_ms(),
             release_ok_threshold_ms: default_play_analysis_release_ok_threshold_ms(),
