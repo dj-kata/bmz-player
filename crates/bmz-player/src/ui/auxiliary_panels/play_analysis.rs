@@ -24,6 +24,7 @@ pub(super) struct PlayAnalysisPanelState {
     daily_press_day: i64,
     daily_lane_presses: [u64; bmz_core::lane::LANE_COUNT],
     selected_history_ids: BTreeSet<i64>,
+    history_selection_anchor_id: Option<i64>,
     counted_pressed_inputs: HashMap<PhysicalInputKey, Lane>,
     pressed_since: HashMap<PhysicalInputKey, PressSampleStart>,
     release_samples: VecDeque<ReleaseSample>,
@@ -40,6 +41,7 @@ impl Default for PlayAnalysisPanelState {
             daily_press_day: local_day_key(),
             daily_lane_presses: [0; bmz_core::lane::LANE_COUNT],
             selected_history_ids: BTreeSet::new(),
+            history_selection_anchor_id: None,
             counted_pressed_inputs: HashMap::new(),
             pressed_since: HashMap::new(),
             release_samples: VecDeque::new(),
@@ -118,13 +120,15 @@ pub(super) fn build_play_analysis_panel(
     state.observe_lane_pattern(panel.scene);
     let mut actions = PlayAnalysisPanelActions::default();
 
-    let window_id = play_analysis_window_id(config.compact_mode);
+    let compact = config.compact_mode;
+    let window_id = play_analysis_window_id(compact);
     play_analysis_window(
         ctx,
         visible,
-        config.compact_mode,
+        compact,
         config.controller_mode,
-        config.window_pos,
+        play_analysis_saved_pos(config, compact),
+        play_analysis_saved_size(config, compact),
     )
     .show(ctx, |ui| {
         if config.compact_mode {
@@ -173,7 +177,7 @@ pub(super) fn build_play_analysis_panel(
             });
         }
     });
-    actions.save_profile |= sync_play_analysis_window_pos(ctx, config, window_id);
+    actions.save_profile |= sync_play_analysis_window_rect(ctx, config, compact, window_id);
 
     actions
 }
@@ -226,6 +230,7 @@ fn play_analysis_window<'open>(
     compact: bool,
     controller_mode: PlayAnalysisControllerModeConfig,
     saved_pos: Option<[f32; 2]>,
+    saved_size: Option<[f32; 2]>,
 ) -> egui::Window<'open> {
     let constrain = ctx.content_rect().shrink(PANEL_VIEWPORT_MARGIN);
     let chrome = panel_window_chrome(ctx);
@@ -239,6 +244,10 @@ fn play_analysis_window<'open>(
     let window_id = play_analysis_window_id(compact);
     let (default_inner, max_inner, clamped_default_pos) =
         clamp_panel_layout(constrain, chrome, width, height, egui::pos2(96.0, 48.0));
+    let default_inner = saved_size
+        .filter(|_| !compact)
+        .map(|[w, h]| egui::vec2(w.clamp(240.0, max_inner.x), h.clamp(120.0, max_inner.y)))
+        .unwrap_or(default_inner);
     let saved_pos = saved_pos.map(|[x, y]| egui::pos2(x, y)).map(|pos| {
         constrain_window_rect_to_area(egui::Rect::from_min_size(pos, default_inner), constrain).min
     });
@@ -271,23 +280,43 @@ fn play_analysis_window_id(compact: bool) -> egui::Id {
     }
 }
 
-fn sync_play_analysis_window_pos(
+fn play_analysis_saved_pos(config: &PlayAnalysisConfig, compact: bool) -> Option<[f32; 2]> {
+    if compact { config.compact_window_pos } else { config.full_window_pos }
+}
+
+fn play_analysis_saved_size(config: &PlayAnalysisConfig, compact: bool) -> Option<[f32; 2]> {
+    if compact { None } else { config.full_window_size }
+}
+
+fn sync_play_analysis_window_rect(
     ctx: &egui::Context,
     config: &mut PlayAnalysisConfig,
+    compact: bool,
     window_id: egui::Id,
 ) -> bool {
     let Some(rect) = ctx.memory(|memory| memory.area_rect(window_id)) else {
         return false;
     };
+    let mut changed = false;
     let pos = [rect.min.x, rect.min.y];
-    if config
-        .window_pos
+    let saved_pos =
+        if compact { &mut config.compact_window_pos } else { &mut config.full_window_pos };
+    if !saved_pos
         .is_some_and(|saved| (saved[0] - pos[0]).abs() < 0.5 && (saved[1] - pos[1]).abs() < 0.5)
     {
-        return false;
+        *saved_pos = Some(pos);
+        changed = true;
     }
-    config.window_pos = Some(pos);
-    true
+    if !compact {
+        let size = [rect.width(), rect.height()];
+        if !config.full_window_size.is_some_and(|saved| {
+            (saved[0] - size[0]).abs() < 0.5 && (saved[1] - size[1]).abs() < 0.5
+        }) {
+            config.full_window_size = Some(size);
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn build_notes_view(
@@ -854,23 +883,25 @@ fn build_history_view(
     library_db: &crate::storage::library_db::LibraryDatabase,
 ) {
     let rows = load_history_rows(score_db, library_db);
+    let mut by_day = BTreeMap::<String, Vec<&HistoryDisplayRow>>::new();
+    for row in &rows {
+        by_day.entry(row.local_day.clone()).or_default().push(row);
+    }
+    let display_order = by_day
+        .iter()
+        .rev()
+        .flat_map(|(_, day_rows)| day_rows.iter().map(|row| row.entry.id))
+        .collect::<Vec<_>>();
     ui.columns(2, |columns| {
         egui::ScrollArea::vertical().show(&mut columns[0], |ui| {
-            let mut by_day = BTreeMap::<String, Vec<&HistoryDisplayRow>>::new();
-            for row in &rows {
-                by_day.entry(row.local_day.clone()).or_default().push(row);
-            }
             for (day, day_rows) in by_day.iter().rev() {
                 egui::CollapsingHeader::new(day).default_open(true).show(ui, |ui| {
                     for row in day_rows {
                         let selected = state.selected_history_ids.contains(&row.entry.id);
                         let response = ui.selectable_label(selected, history_row_label(row));
                         if response.clicked() {
-                            if selected {
-                                state.selected_history_ids.remove(&row.entry.id);
-                            } else {
-                                state.selected_history_ids.insert(row.entry.id);
-                            }
+                            let shift_pressed = ui.input(|input| input.modifiers.shift);
+                            select_history_row(state, &display_order, row.entry.id, shift_pressed);
                         }
                     }
                 });
@@ -893,6 +924,36 @@ fn build_history_view(
             rows => build_history_selection_summary(&mut columns[1], rows),
         }
     });
+}
+
+fn select_history_row(
+    state: &mut PlayAnalysisPanelState,
+    display_order: &[i64],
+    clicked_id: i64,
+    shift_pressed: bool,
+) {
+    let Some(clicked_index) = display_order.iter().position(|id| *id == clicked_id) else {
+        state.selected_history_ids.clear();
+        state.selected_history_ids.insert(clicked_id);
+        state.history_selection_anchor_id = Some(clicked_id);
+        return;
+    };
+
+    if shift_pressed
+        && let Some(anchor_id) = state.history_selection_anchor_id
+        && let Some(anchor_index) = display_order.iter().position(|id| *id == anchor_id)
+    {
+        let (start, end) = if anchor_index <= clicked_index {
+            (anchor_index, clicked_index)
+        } else {
+            (clicked_index, anchor_index)
+        };
+        state.selected_history_ids = display_order[start..=end].iter().copied().collect();
+    } else {
+        state.selected_history_ids.clear();
+        state.selected_history_ids.insert(clicked_id);
+        state.history_selection_anchor_id = Some(clicked_id);
+    }
 }
 
 fn build_history_selection_summary(ui: &mut egui::Ui, rows: &[&HistoryDisplayRow]) {
