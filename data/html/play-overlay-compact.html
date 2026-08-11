@@ -16,9 +16,14 @@
       --muted: #8f9caf;
       --accent: #78d6ff;
       --press: #89e5ff;
+      --press-bg: rgba(81, 183, 224, 0.78);
       --ok: #46d37f;
       --warn: #f1c94e;
       --ng: #f05b68;
+      --random-white: rgba(244, 247, 251, 0.9);
+      --random-blue: rgba(78, 171, 241, 0.88);
+      --random-red-text: #ff314f;
+      --random-yellow-text: #ffe84f;
     }
 
     body {
@@ -39,31 +44,16 @@
     }
 
     .top {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 8px 16px;
+      display: flex;
       align-items: baseline;
+      gap: 12px;
       margin-bottom: 10px;
-    }
-
-    .title {
-      max-width: 520px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-weight: 700;
-      letter-spacing: 0.02em;
-    }
-
-    .status {
-      font-size: 12px;
-      color: var(--muted);
     }
 
     .metrics {
       display: flex;
       gap: 12px;
-      grid-column: 1 / -1;
+      font-size: 14px;
       font-variant-numeric: tabular-nums;
       color: var(--muted);
     }
@@ -73,18 +63,45 @@
       margin-left: 4px;
     }
 
-    .lanes {
+    .status {
+      margin-left: auto;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(20, 25, 38, 0.5);
+    }
+
+    .main {
+      display: flex;
+      gap: 8px;
+      align-items: stretch;
+    }
+
+    .keys {
+      display: grid;
+      grid-template-rows: 1fr 1fr;
+      gap: 6px;
+    }
+
+    .keys-row {
       display: flex;
       gap: 6px;
-      align-items: end;
+    }
+
+    .keys-row.top-row {
+      padding-left: 24px;
     }
 
     .lane {
       width: 42px;
-      height: 76px;
+      height: 56px;
       display: grid;
-      grid-template-rows: auto 1fr auto;
-      gap: 4px;
+      grid-template-rows: 1fr auto;
+      gap: 2px;
       padding: 6px 5px;
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -96,17 +113,98 @@
     .lane.pressed {
       transform: translateY(-3px);
       border-color: var(--press);
-      background: rgba(81, 183, 224, 0.78);
+      background: var(--press-bg);
     }
 
-    .lane.scratch {
-      width: 54px;
-      border-radius: 24px;
+    .lane.ok {
+      border-color: var(--ok);
     }
 
-    .label {
-      font-size: 12px;
-      color: var(--muted);
+    .lane.warn {
+      border-color: var(--warn);
+    }
+
+    .lane.ng {
+      border-color: var(--ng);
+    }
+
+    .lane.pressed {
+      border-color: var(--press);
+    }
+
+    .scratch {
+      position: relative;
+      width: 132px;
+      height: 132px;
+      flex: 0 0 132px;
+      overflow: visible;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: var(--panel);
+    }
+
+    .scratch-outer {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      border-radius: 50%;
+    }
+
+    .scratch-outer::before,
+    .scratch-outer::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      width: 100%;
+      height: 50%;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .scratch-outer::before {
+      top: 0;
+      border-radius: 66px 66px 0 0;
+    }
+
+    .scratch-outer::after {
+      bottom: 0;
+      border-radius: 0 0 66px 66px;
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    .scratch-half {
+      position: absolute;
+      left: 14px;
+      width: 104px;
+      height: 52px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      box-sizing: border-box;
+      text-align: center;
+      transition: background 70ms linear, border-color 70ms linear;
+    }
+
+    .scratch-half.up {
+      top: 14px;
+      border-radius: 52px 52px 0 0;
+    }
+
+    .scratch-half.down {
+      bottom: 14px;
+      border-radius: 0 0 52px 52px;
+    }
+
+    .scratch-half.pressed {
+      transform: none;
+      border-color: var(--press);
+      background: var(--press-bg);
+    }
+
+    .scratch-half .release {
+      font-size: 16px;
+    }
+
+    .scratch-half .count {
+      font-size: 11px;
     }
 
     .release {
@@ -137,20 +235,92 @@
       color: var(--text);
       font-variant-numeric: tabular-nums;
     }
+
+    .random-panel {
+      margin-top: 8px;
+      padding: 8px;
+    }
+
+    .random-panel.hidden {
+      display: none;
+    }
+
+    .random-title {
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .random-lanes {
+      display: flex;
+      gap: 4px;
+      align-items: stretch;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .random-lane {
+      width: 22px;
+      height: 52px;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      text-align: center;
+      font-size: 22px;
+      font-weight: 800;
+      text-shadow:
+        -2px -2px 0 #000,
+        -1px -2px 0 #000,
+        0 -2px 0 #000,
+        1px -2px 0 #000,
+        2px -2px 0 #000,
+        -2px -1px 0 #000,
+        2px -1px 0 #000,
+        -2px 0 0 #000,
+        2px 0 0 #000,
+        -2px 1px 0 #000,
+        2px 1px 0 #000,
+        -2px 2px 0 #000,
+        -1px 2px 0 #000,
+        0 2px 0 #000,
+        1px 2px 0 #000,
+        2px 2px 0 #000;
+    }
+
+    .random-lane.white {
+      background: var(--random-white);
+    }
+
+    .random-lane.blue {
+      background: var(--random-blue);
+    }
+
+    .random-lane.red-text {
+      color: var(--random-red-text);
+    }
+
+    .random-lane.yellow-text {
+      color: var(--random-yellow-text);
+    }
   </style>
 </head>
 <body>
   <main class="overlay">
     <section class="top">
-      <div class="title" id="title">BMZ Player</div>
-      <div class="status" id="status">connecting...</div>
       <div class="metrics">
-        <span>notes <strong id="notes">-</strong></span>
         <span>plays <strong id="plays">-</strong></span>
-        <span>rate <strong id="rate">-</strong></span>
+        <span>notes <strong id="notes">-</strong></span>
       </div>
+      <div class="status" id="status">connecting...</div>
     </section>
-    <section class="lanes" id="lanes"></section>
+    <section class="main" id="lanes"></section>
+    <section class="random-panel panel hidden" id="random-panel">
+      <div class="random-title">random lanes</div>
+      <div class="random-lanes" id="random-lanes"></div>
+    </section>
   </main>
 
   <script>
@@ -159,22 +329,17 @@
     const ok = Number(params.get("ok") || "60");
     const ng = Number(params.get("ng") || "80");
     const statusEl = document.getElementById("status");
-    const titleEl = document.getElementById("title");
-    const notesEl = document.getElementById("notes");
     const playsEl = document.getElementById("plays");
-    const rateEl = document.getElementById("rate");
+    const notesEl = document.getElementById("notes");
     const lanesEl = document.getElementById("lanes");
+    const randomPanelEl = document.getElementById("random-panel");
+    const randomLanesEl = document.getElementById("random-lanes");
 
     let retryTimer = null;
 
     function formatNumber(value) {
       if (value === null || value === undefined) return "-";
       return Number(value).toLocaleString("en-US");
-    }
-
-    function formatRate(value) {
-      if (value === null || value === undefined) return "-";
-      return `${(Number(value) * 100).toFixed(2)}%`;
     }
 
     function releaseClass(value) {
@@ -184,28 +349,124 @@
       return "ng";
     }
 
-    function render(payload) {
-      titleEl.textContent = payload.summary?.title || "BMZ Player";
-      notesEl.textContent = formatNumber(payload.summary?.notes);
-      playsEl.textContent = formatNumber(payload.summary?.play_count);
-      rateEl.textContent = formatRate(payload.summary?.score_rate);
-      lanesEl.replaceChildren(...(payload.lanes || []).map((lane) => {
+    function laneNumber(lane) {
+      if (!lane?.id?.startsWith("key")) return null;
+      return Number(lane.id.slice(3));
+    }
+
+    function localLaneNumber(lane) {
+      const number = laneNumber(lane);
+      if (number === null) return null;
+      return number >= 8 ? number - 7 : number;
+    }
+
+    function isTopKey(lane) {
+      const number = localLaneNumber(lane);
+      return number !== null && number % 2 === 0;
+    }
+
+    function isBottomKey(lane) {
+      const number = localLaneNumber(lane);
+      return number !== null && number % 2 === 1;
+    }
+
+    function laneTemplate(lane, extraClass = "") {
+      const releaseValue = lane?.release_ms;
+      const release = releaseValue === null || releaseValue === undefined
+        ? "---"
+        : String(Math.round(Math.max(0, Math.min(999, releaseValue)))).padStart(3, " ");
+      const root = document.createElement("div");
+      root.className =
+        `lane ${extraClass} ${releaseClass(releaseValue)} ${lane?.pressed ? "pressed" : ""}`;
+      root.innerHTML = `
+        <div class="release ${releaseClass(releaseValue)}"></div>
+        <div class="count"></div>
+      `;
+      root.querySelector(".release").textContent = release;
+      root.querySelector(".count").textContent = formatNumber(lane?.total_presses);
+      return root;
+    }
+
+    function scratchHalfTemplate(lane, active, position) {
+      const root = laneTemplate({ ...lane, pressed: active }, `scratch-half ${position}`);
+      return root;
+    }
+
+    function renderScratch(lane) {
+      const root = document.createElement("div");
+      root.className = "scratch panel";
+      const outer = document.createElement("div");
+      outer.className = "scratch-outer";
+      const up = scratchHalfTemplate(lane, lane?.scratch_up, "up");
+      const down = scratchHalfTemplate(lane, lane?.scratch_down, "down");
+      root.append(outer, up, down);
+      return root;
+    }
+
+    function renderKeyRows(lanes) {
+      const keys = document.createElement("div");
+      keys.className = "keys";
+      const top = document.createElement("div");
+      const bottom = document.createElement("div");
+      top.className = "keys-row top-row";
+      bottom.className = "keys-row bottom-row";
+      lanes.filter(isTopKey).forEach((lane) => top.append(laneTemplate(lane)));
+      lanes.filter(isBottomKey).forEach((lane) => bottom.append(laneTemplate(lane)));
+      keys.append(top, bottom);
+      return keys;
+    }
+
+    function renderRandom(payload) {
+      const lanes = payload.lanes || [];
+      const pattern = payload.lane_pattern || [];
+      const keyLanes = lanes.filter((lane) => laneNumber(lane) !== null);
+      const values = keyLanes
+        .map((lane) => {
+          const number = laneNumber(lane);
+          const source = pattern[number] ?? 0;
+          return number >= 8 && source >= 8 && source <= 14 ? source - 7 :
+            number < 8 && source >= 1 && source <= 7 ? source :
+            0;
+        })
+        .filter((value) => value > 0);
+
+      randomPanelEl.classList.toggle("hidden", values.length === 0);
+      randomLanesEl.replaceChildren(...values.map((value) => {
         const root = document.createElement("div");
-        root.className = `lane ${lane.id.includes("scratch") ? "scratch" : ""} ${lane.pressed ? "pressed" : ""}`;
-        const releaseValue = lane.release_ms;
-        const release = releaseValue === null || releaseValue === undefined
-          ? "---"
-          : String(Math.round(Math.max(0, Math.min(999, releaseValue)))).padStart(3, " ");
-        root.innerHTML = `
-          <div class="label"></div>
-          <div class="release ${releaseClass(releaseValue)}"></div>
-          <div class="count"></div>
-        `;
-        root.querySelector(".label").textContent = lane.label;
-        root.querySelector(".release").textContent = release;
-        root.querySelector(".count").textContent = formatNumber(lane.total_presses);
+        const laneColor = value % 2 === 0 ? "blue" : "white";
+        const textColor = value === 1 ? "red-text" : "yellow-text";
+        root.className = `random-lane ${laneColor} ${textColor}`;
+        root.textContent = String(value);
         return root;
       }));
+    }
+
+    function render(payload) {
+      playsEl.textContent = formatNumber(payload.summary?.play_count);
+      notesEl.textContent = formatNumber(payload.summary?.notes);
+      const lanes = payload.lanes || [];
+      const scratch1 = lanes.find((lane) => lane.id === "scratch");
+      const scratch2 = lanes.find((lane) => lane.id === "scratch2");
+      const p1Keys = lanes.filter((lane) => {
+        const number = laneNumber(lane);
+        return number !== null && number <= 7;
+      });
+      const p2Keys = lanes.filter((lane) => laneNumber(lane) >= 8);
+      const children = [];
+      if (payload.controller_mode === "7K (2P)") {
+        children.push(renderKeyRows(p1Keys));
+        if (scratch1) children.push(renderScratch(scratch1));
+      } else if (payload.controller_mode === "14K") {
+        if (scratch1) children.push(renderScratch(scratch1));
+        children.push(renderKeyRows(p1Keys));
+        children.push(renderKeyRows(p2Keys));
+        if (scratch2) children.push(renderScratch(scratch2));
+      } else {
+        if (scratch1) children.push(renderScratch(scratch1));
+        children.push(renderKeyRows(p1Keys));
+      }
+      lanesEl.replaceChildren(...children);
+      renderRandom(payload);
     }
 
     function connect() {
