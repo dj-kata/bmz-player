@@ -199,12 +199,18 @@
       background: var(--press-bg);
     }
 
-    .scratch-half .release {
-      font-size: 16px;
-    }
-
-    .scratch-half .count {
-      font-size: 11px;
+    .scratch-count {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      z-index: 1;
+      min-width: 3ch;
+      transform: translate(-50%, -50%);
+      color: var(--text);
+      font-size: 15px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      text-align: center;
     }
 
     .release {
@@ -370,10 +376,18 @@
       return number !== null && number % 2 === 1;
     }
 
-    function laneTemplate(lane, extraClass = "") {
+    function showRelease(payload) {
+      return payload.release_display_mode !== "count";
+    }
+
+    function showCount(payload) {
+      return payload.release_display_mode !== "release";
+    }
+
+    function laneTemplate(lane, extraClass = "", display = { release: true, count: true }) {
       const releaseValue = lane?.release_ms;
-      const release = releaseValue === null || releaseValue === undefined
-        ? "---"
+      const release = !display.release || releaseValue === null || releaseValue === undefined
+        ? ""
         : String(Math.round(Math.max(0, Math.min(999, releaseValue)))).padStart(3, " ");
       const root = document.createElement("div");
       root.className =
@@ -383,16 +397,19 @@
         <div class="count"></div>
       `;
       root.querySelector(".release").textContent = release;
-      root.querySelector(".count").textContent = formatNumber(lane?.total_presses);
+      root.querySelector(".count").textContent = display.count
+        ? formatNumber(lane?.total_presses)
+        : "";
       return root;
     }
 
     function scratchHalfTemplate(lane, active, position) {
-      const root = laneTemplate({ ...lane, pressed: active }, `scratch-half ${position}`);
+      const root = document.createElement("div");
+      root.className = `scratch-half ${position} ${active ? "pressed" : ""}`;
       return root;
     }
 
-    function renderScratch(lane) {
+    function renderScratch(lane, countEnabled) {
       const root = document.createElement("div");
       root.className = "scratch panel";
       const outer = document.createElement("div");
@@ -400,18 +417,24 @@
       const up = scratchHalfTemplate(lane, lane?.scratch_up, "up");
       const down = scratchHalfTemplate(lane, lane?.scratch_down, "down");
       root.append(outer, up, down);
+      if (countEnabled) {
+        const count = document.createElement("div");
+        count.className = "scratch-count";
+        count.textContent = formatNumber(lane?.total_presses);
+        root.append(count);
+      }
       return root;
     }
 
-    function renderKeyRows(lanes) {
+    function renderKeyRows(lanes, display) {
       const keys = document.createElement("div");
       keys.className = "keys";
       const top = document.createElement("div");
       const bottom = document.createElement("div");
       top.className = "keys-row top-row";
       bottom.className = "keys-row bottom-row";
-      lanes.filter(isTopKey).forEach((lane) => top.append(laneTemplate(lane)));
-      lanes.filter(isBottomKey).forEach((lane) => bottom.append(laneTemplate(lane)));
+      lanes.filter(isTopKey).forEach((lane) => top.append(laneTemplate(lane, "", display)));
+      lanes.filter(isBottomKey).forEach((lane) => bottom.append(laneTemplate(lane, "", display)));
       keys.append(top, bottom);
       return keys;
     }
@@ -452,18 +475,19 @@
         return number !== null && number <= 7;
       });
       const p2Keys = lanes.filter((lane) => laneNumber(lane) >= 8);
+      const display = { release: showRelease(payload), count: showCount(payload) };
       const children = [];
       if (payload.controller_mode === "7K (2P)") {
-        children.push(renderKeyRows(p1Keys));
-        if (scratch1) children.push(renderScratch(scratch1));
+        children.push(renderKeyRows(p1Keys, display));
+        if (scratch1) children.push(renderScratch(scratch1, display.count));
       } else if (payload.controller_mode === "14K") {
-        if (scratch1) children.push(renderScratch(scratch1));
-        children.push(renderKeyRows(p1Keys));
-        children.push(renderKeyRows(p2Keys));
-        if (scratch2) children.push(renderScratch(scratch2));
+        if (scratch1) children.push(renderScratch(scratch1, display.count));
+        children.push(renderKeyRows(p1Keys, display));
+        children.push(renderKeyRows(p2Keys, display));
+        if (scratch2) children.push(renderScratch(scratch2, display.count));
       } else {
-        if (scratch1) children.push(renderScratch(scratch1));
-        children.push(renderKeyRows(p1Keys));
+        if (scratch1) children.push(renderScratch(scratch1, display.count));
+        children.push(renderKeyRows(p1Keys, display));
       }
       lanesEl.replaceChildren(...children);
       renderRandom(payload);
