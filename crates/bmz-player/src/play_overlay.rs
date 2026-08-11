@@ -1,6 +1,7 @@
-use std::collections::{HashMap, HashSet, VecDeque, hash_map::Entry};
+use std::borrow::Cow;
+use std::collections::{HashMap, VecDeque, hash_map::Entry};
 use std::net::SocketAddr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bmz_core::input::ScratchDirection;
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
@@ -17,7 +18,7 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::config::play_input::lane_binding_for_key_mode;
 use crate::config::profile_config::{
     PlayOverlayConfig, PlayOverlayControllerModeConfig, PlayOverlayReleaseDisplayModeConfig,
-    ProfileInputConfig,
+    PlayOverlayUpdateRateConfig, ProfileInputConfig,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +65,7 @@ impl PlayOverlayController {
         tracing::info!(port = config.port, "play overlay WebSocket enabled");
     }
 
-    pub fn publish(&self, payload: &PlayOverlayPayload) {
+    pub fn publish(&self, payload: &PlayOverlayPayload<'_>) {
         if !self.applied.enabled {
             return;
         }
@@ -143,33 +144,47 @@ pub struct PlayOverlayState {
     release_samples: VecDeque<ReleaseSample>,
     last_release_by_lane: [Option<f32>; LANE_COUNT],
     total_lane_presses: [u64; LANE_COUNT],
+    next_publish_at: Option<Instant>,
 }
 
 impl PlayOverlayState {
-    pub fn build_payload(
+    pub fn should_publish(&mut self, rate: PlayOverlayUpdateRateConfig, now: Instant) -> bool {
+        if let Some(next_publish_at) = self.next_publish_at
+            && now < next_publish_at
+        {
+            return false;
+        }
+        self.next_publish_at = Some(now + overlay_publish_interval(rate));
+        true
+    }
+
+    pub fn reset_publish_throttle(&mut self) {
+        self.next_publish_at = None;
+    }
+
+    pub fn build_payload<'a>(
         &mut self,
         config: &PlayOverlayConfig,
         input_config: &ProfileInputConfig,
-        scene: &AppSceneSnapshot,
+        scene: &'a AppSceneSnapshot,
         pressed_play_inputs: &[(DeviceId, PhysicalControl)],
-    ) -> PlayOverlayPayload {
+    ) -> PlayOverlayPayload<'a> {
         let active = self.observe_inputs(config, input_config, pressed_play_inputs);
         PlayOverlayPayload {
             version: 1,
             generated_at_ms: unix_time_ms(),
             enabled: config.websocket_enabled,
-            controller_mode: controller_mode_label(config.controller_mode).to_string(),
-            release_display_mode: release_display_mode_label(config.release_display_mode)
-                .to_string(),
+            controller_mode: controller_mode_label(config.controller_mode),
+            release_display_mode: release_display_mode_label(config.release_display_mode),
             summary: PlayOverlaySummary::from_scene(scene),
             lanes: overlay_lanes(config.controller_mode)
                 .iter()
                 .map(|&lane| PlayOverlayLanePayload {
-                    id: lane_id(lane).to_string(),
-                    label: lane_label(config.controller_mode, lane).to_string(),
-                    pressed: active.lanes.contains(&lane),
-                    scratch_up: active.scratch_up.contains(&lane),
-                    scratch_down: active.scratch_down.contains(&lane),
+                    id: lane_id(lane),
+                    label: lane_label(config.controller_mode, lane),
+                    pressed: active.lanes[lane.index()],
+                    scratch_up: active.scratch_up[lane.index()],
+                    scratch_down: active.scratch_down[lane.index()],
                     release_ms: self.last_release_by_lane[lane.index()],
                     total_presses: self.total_lane_presses[lane.index()],
                 })
@@ -190,9 +205,9 @@ impl PlayOverlayState {
         let pressed = pressed_play_inputs
             .iter()
             .map(|(device, control)| PhysicalInputKey { device: *device, control: control.clone() })
-            .collect::<HashSet<_>>();
+            .collect::<Vec<_>>();
         for key in &pressed {
-            let Some(resolved) = active.by_input.get(key).copied() else {
+            let Some(resolved) = active.resolved_for(key) else {
                 continue;
             };
             if let Some(lane) = resolved.lane
@@ -218,7 +233,7 @@ impl PlayOverlayState {
             .cloned()
             .collect::<Vec<_>>();
         self.counted_pressed_inputs.retain(|key, _| pressed.contains(key));
-        let mut updated_release_lanes = Vec::new();
+        let mut updated_release_lanes = [false; LANE_COUNT];
         for key in released {
             if let Some(started) = self.pressed_since.remove(&key) {
                 let held_ms = now.duration_since(started.started_at).as_secs_f32() * 1000.0;
@@ -228,7 +243,7 @@ impl PlayOverlayState {
                         lane: started.lane,
                         held_ms,
                     });
-                    updated_release_lanes.push(started.lane);
+                    updated_release_lanes[started.lane.index()] = true;
                 }
             }
         }
@@ -238,8 +253,10 @@ impl PlayOverlayState {
         }) {
             self.release_samples.pop_front();
         }
-        for lane in updated_release_lanes {
-            self.last_release_by_lane[lane.index()] = self.lane_average_ms(lane);
+        for &lane in overlay_lanes(config.controller_mode) {
+            if updated_release_lanes[lane.index()] {
+                self.last_release_by_lane[lane.index()] = self.lane_average_ms(lane);
+            }
         }
         active
     }
@@ -275,29 +292,29 @@ struct ReleaseSample {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct PlayOverlayPayload {
+pub struct PlayOverlayPayload<'a> {
     pub version: u32,
     pub generated_at_ms: u128,
     pub enabled: bool,
-    pub controller_mode: String,
-    pub release_display_mode: String,
-    pub summary: PlayOverlaySummary,
+    pub controller_mode: &'static str,
+    pub release_display_mode: &'static str,
+    pub summary: PlayOverlaySummary<'a>,
     pub lanes: Vec<PlayOverlayLanePayload>,
-    pub lane_pattern: Vec<u8>,
+    pub lane_pattern: Cow<'a, [u8]>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct PlayOverlaySummary {
+pub struct PlayOverlaySummary<'a> {
     pub scene: &'static str,
-    pub title: String,
+    pub title: Cow<'a, str>,
     pub notes: u32,
     pub play_count: u32,
     pub ex_score: Option<u32>,
     pub score_rate: Option<f32>,
 }
 
-impl PlayOverlaySummary {
-    fn from_scene(scene: &AppSceneSnapshot) -> Self {
+impl<'a> PlayOverlaySummary<'a> {
+    fn from_scene(scene: &'a AppSceneSnapshot) -> Self {
         match scene {
             AppSceneSnapshot::Select(snapshot) => {
                 let row = snapshot
@@ -306,8 +323,15 @@ impl PlayOverlaySummary {
                     .find(|row| row.index == snapshot.selected_index)
                     .or_else(|| snapshot.rows.first());
                 let (title, notes, play_count, ex_score) = row
-                    .map(|row| (row.title.clone(), row.total_notes, row.play_count, row.ex_score))
-                    .unwrap_or_else(|| (String::new(), 0, 0, None));
+                    .map(|row| {
+                        (
+                            Cow::Borrowed(row.title.as_str()),
+                            row.total_notes,
+                            row.play_count,
+                            row.ex_score,
+                        )
+                    })
+                    .unwrap_or_else(|| (Cow::Borrowed(""), 0, 0, None));
                 Self {
                     scene: "Select",
                     title,
@@ -319,7 +343,7 @@ impl PlayOverlaySummary {
             }
             AppSceneSnapshot::Decide(snapshot) => Self {
                 scene: "Decide",
-                title: snapshot.title.clone(),
+                title: Cow::Borrowed(snapshot.title.as_str()),
                 notes: snapshot.total_notes,
                 play_count: 0,
                 ex_score: Some(snapshot.ex_score),
@@ -327,7 +351,7 @@ impl PlayOverlaySummary {
             },
             AppSceneSnapshot::Play(snapshot) => Self {
                 scene: "Play",
-                title: snapshot.title.clone(),
+                title: Cow::Borrowed(snapshot.title.as_str()),
                 notes: snapshot.total_notes,
                 play_count: 0,
                 ex_score: Some(snapshot.ex_score),
@@ -335,7 +359,7 @@ impl PlayOverlaySummary {
             },
             AppSceneSnapshot::Result(snapshot) => Self {
                 scene: "Result",
-                title: snapshot.title.clone(),
+                title: Cow::Borrowed(snapshot.title.as_str()),
                 notes: snapshot.total_notes,
                 play_count: 0,
                 ex_score: Some(snapshot.ex_score),
@@ -347,8 +371,8 @@ impl PlayOverlaySummary {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PlayOverlayLanePayload {
-    pub id: String,
-    pub label: String,
+    pub id: &'static str,
+    pub label: &'static str,
     pub pressed: bool,
     pub scratch_up: bool,
     pub scratch_down: bool,
@@ -363,10 +387,16 @@ struct ResolvedInput {
 
 #[derive(Debug, Default)]
 struct ActiveOverlayInputs {
-    lanes: HashSet<Lane>,
-    scratch_up: HashSet<Lane>,
-    scratch_down: HashSet<Lane>,
-    by_input: HashMap<PhysicalInputKey, ResolvedInput>,
+    lanes: [bool; LANE_COUNT],
+    scratch_up: [bool; LANE_COUNT],
+    scratch_down: [bool; LANE_COUNT],
+    by_input: Vec<(PhysicalInputKey, ResolvedInput)>,
+}
+
+impl ActiveOverlayInputs {
+    fn resolved_for(&self, key: &PhysicalInputKey) -> Option<ResolvedInput> {
+        self.by_input.iter().find(|(input, _)| input == key).map(|(_, resolved)| *resolved)
+    }
 }
 
 fn resolve_active_inputs(
@@ -384,17 +414,21 @@ fn resolve_active_inputs(
                 let Some(display_lane) = controller_display_lane(mode, resolved.lane) else {
                     continue;
                 };
-                active.lanes.insert(display_lane);
+                active.lanes[display_lane.index()] = true;
                 if resolved.scratch_direction == Some(ScratchDirection::Up) {
-                    active.scratch_up.insert(display_lane);
+                    active.scratch_up[display_lane.index()] = true;
                 }
                 if resolved.scratch_direction == Some(ScratchDirection::Down) {
-                    active.scratch_down.insert(display_lane);
+                    active.scratch_down[display_lane.index()] = true;
                 }
-                active.by_input.insert(
-                    PhysicalInputKey { device: *device, control: control.clone() },
-                    ResolvedInput { lane: Some(display_lane) },
-                );
+                let key = PhysicalInputKey { device: *device, control: control.clone() };
+                if let Some((_, existing)) =
+                    active.by_input.iter_mut().find(|(input, _)| *input == key)
+                {
+                    *existing = ResolvedInput { lane: Some(display_lane) };
+                } else {
+                    active.by_input.push((key, ResolvedInput { lane: Some(display_lane) }));
+                }
             }
         }
     }
@@ -572,13 +606,13 @@ fn release_display_mode_label(mode: PlayOverlayReleaseDisplayModeConfig) -> &'st
     }
 }
 
-fn lane_pattern_from_scene(scene: &AppSceneSnapshot) -> Vec<u8> {
+fn lane_pattern_from_scene(scene: &AppSceneSnapshot) -> Cow<'_, [u8]> {
     match scene {
-        AppSceneSnapshot::Select(snapshot) => snapshot.lane_shuffle_pattern.clone(),
+        AppSceneSnapshot::Select(snapshot) => Cow::Borrowed(&snapshot.lane_shuffle_pattern),
         AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
-            snapshot.lane_shuffle_pattern.clone()
+            Cow::Borrowed(&snapshot.lane_shuffle_pattern)
         }
-        AppSceneSnapshot::Result(snapshot) => snapshot.lane_shuffle_pattern.clone(),
+        AppSceneSnapshot::Result(snapshot) => Cow::Borrowed(&snapshot.lane_shuffle_pattern),
     }
 }
 
@@ -592,4 +626,69 @@ fn unix_time_ms() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or_default()
+}
+
+fn overlay_publish_interval(rate: PlayOverlayUpdateRateConfig) -> Duration {
+    Duration::from_nanos(1_000_000_000 / u64::from(rate.fps().max(1)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publish_throttle_uses_configured_update_rate() {
+        let start = Instant::now();
+        let mut state = PlayOverlayState::default();
+
+        assert!(state.should_publish(PlayOverlayUpdateRateConfig::Fps60, start));
+        assert!(
+            !state.should_publish(
+                PlayOverlayUpdateRateConfig::Fps60,
+                start + Duration::from_millis(10)
+            )
+        );
+        assert!(
+            state.should_publish(
+                PlayOverlayUpdateRateConfig::Fps60,
+                start + Duration::from_millis(17)
+            )
+        );
+
+        let mut fast_state = PlayOverlayState::default();
+        assert!(fast_state.should_publish(PlayOverlayUpdateRateConfig::Fps240, start));
+        assert!(
+            !fast_state.should_publish(
+                PlayOverlayUpdateRateConfig::Fps240,
+                start + Duration::from_millis(3)
+            )
+        );
+        assert!(
+            fast_state.should_publish(
+                PlayOverlayUpdateRateConfig::Fps240,
+                start + Duration::from_millis(5)
+            )
+        );
+    }
+
+    #[test]
+    fn publish_throttle_resets_after_disable() {
+        let start = Instant::now();
+        let mut state = PlayOverlayState::default();
+
+        assert!(state.should_publish(PlayOverlayUpdateRateConfig::Fps60, start));
+        assert!(
+            !state.should_publish(
+                PlayOverlayUpdateRateConfig::Fps60,
+                start + Duration::from_millis(1)
+            )
+        );
+        state.reset_publish_throttle();
+        assert!(
+            state.should_publish(
+                PlayOverlayUpdateRateConfig::Fps60,
+                start + Duration::from_millis(1)
+            )
+        );
+    }
 }

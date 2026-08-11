@@ -32,10 +32,10 @@ use crate::config::profile_config::{
     HISPEED_STEP_MAX, HISPEED_STEP_MIN, HispeedModeConfig, HsFixConfig, IrConfig,
     IrCredentialStoreConfig, IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
     JudgeAlgorithmConfig, LaneEffectConfig, PlayOverlayControllerModeConfig,
-    PlayOverlayReleaseDisplayModeConfig, ProfileConfig, RELEASE_BOUNCE_MS_MAX, RandomOptionConfig,
-    ReplaySlotRule, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
-    default_hispeed_step_fhs, default_hispeed_step_nhs, normalize_hispeed_step,
-    normalized_ir_base_url,
+    PlayOverlayReleaseDisplayModeConfig, PlayOverlayUpdateRateConfig, ProfileConfig,
+    RELEASE_BOUNCE_MS_MAX, RandomOptionConfig, ReplaySlotRule, SkinConfig, SkinHistoryEntryConfig,
+    SkinOffsetConfig, TargetOptionConfig, default_hispeed_step_fhs, default_hispeed_step_nhs,
+    normalize_hispeed_step, normalized_ir_base_url,
 };
 use crate::i18n::{AppLocale, FluentArgs, Localizer};
 use crate::ln_policy::LnPolicySetting;

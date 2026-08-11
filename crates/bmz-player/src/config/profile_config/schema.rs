@@ -43,6 +43,8 @@ pub struct PlayOverlayConfig {
     pub websocket_enabled: bool,
     #[serde(default = "default_play_overlay_websocket_port")]
     pub websocket_port: u16,
+    #[serde(default)]
+    pub websocket_update_rate: PlayOverlayUpdateRateConfig,
     #[serde(default = "default_play_overlay_release_ignore_threshold_ms")]
     pub release_ignore_threshold_ms: u32,
     #[serde(default = "default_play_overlay_release_window_ms")]
@@ -62,6 +64,7 @@ impl Default for PlayOverlayConfig {
         Self {
             websocket_enabled: false,
             websocket_port: default_play_overlay_websocket_port(),
+            websocket_update_rate: PlayOverlayUpdateRateConfig::default(),
             release_ignore_threshold_ms: default_play_overlay_release_ignore_threshold_ms(),
             release_window_ms: default_play_overlay_release_window_ms(),
             release_ok_threshold_ms: default_play_overlay_release_ok_threshold_ms(),
@@ -90,6 +93,25 @@ pub fn default_play_overlay_release_ok_threshold_ms() -> u32 {
 
 pub fn default_play_overlay_release_ng_threshold_ms() -> u32 {
     80
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum PlayOverlayUpdateRateConfig {
+    #[default]
+    Fps60,
+    Fps120,
+    Fps240,
+}
+
+impl PlayOverlayUpdateRateConfig {
+    pub fn fps(self) -> u32 {
+        match self {
+            Self::Fps60 => 60,
+            Self::Fps120 => 120,
+            Self::Fps240 => 240,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

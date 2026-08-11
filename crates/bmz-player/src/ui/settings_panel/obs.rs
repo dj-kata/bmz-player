@@ -187,6 +187,44 @@ pub(in crate::ui) fn build_play_overlay_settings_section(
                 changed |= ui
                     .add(egui::DragValue::new(&mut config.websocket_port).range(1..=65535))
                     .changed();
+                ui.label(tr!(text, "settings-play-overlay-update-rate"));
+                egui::ComboBox::from_id_salt("settings_play_overlay_update_rate")
+                    .selected_text(play_overlay_update_rate_label(
+                        config.websocket_update_rate,
+                        text,
+                    ))
+                    .show_ui(ui, |ui| {
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.websocket_update_rate,
+                                PlayOverlayUpdateRateConfig::Fps60,
+                                play_overlay_update_rate_label(
+                                    PlayOverlayUpdateRateConfig::Fps60,
+                                    text,
+                                ),
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.websocket_update_rate,
+                                PlayOverlayUpdateRateConfig::Fps120,
+                                play_overlay_update_rate_label(
+                                    PlayOverlayUpdateRateConfig::Fps120,
+                                    text,
+                                ),
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut config.websocket_update_rate,
+                                PlayOverlayUpdateRateConfig::Fps240,
+                                play_overlay_update_rate_label(
+                                    PlayOverlayUpdateRateConfig::Fps240,
+                                    text,
+                                ),
+                            )
+                            .changed();
+                    });
             });
             ui.horizontal(|ui| {
                 ui.label(tr!(text, "settings-play-overlay-release-window"));
@@ -311,6 +349,14 @@ pub(in crate::ui) fn build_play_overlay_settings_section(
             ui.small(tr!(text, "settings-play-overlay-html-preview-help"));
         });
     changed
+}
+
+fn play_overlay_update_rate_label(rate: PlayOverlayUpdateRateConfig, text: Localizer) -> String {
+    match rate {
+        PlayOverlayUpdateRateConfig::Fps60 => tr!(text, "settings-play-overlay-update-rate-60"),
+        PlayOverlayUpdateRateConfig::Fps120 => tr!(text, "settings-play-overlay-update-rate-120"),
+        PlayOverlayUpdateRateConfig::Fps240 => tr!(text, "settings-play-overlay-update-rate-240"),
+    }
 }
 
 fn play_overlay_controller_mode_label(

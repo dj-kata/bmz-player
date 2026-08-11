@@ -173,14 +173,23 @@ impl WinitApp {
     }
 
     fn publish_play_overlay_snapshot_for_current_frame(&mut self) {
-        if !self.boot.profile_config.play_overlay.websocket_enabled {
+        let config = &self.boot.profile_config.play_overlay;
+        if !config.websocket_enabled {
+            self.integrations.play_overlay_state.reset_publish_throttle();
+            return;
+        }
+        if !self
+            .integrations
+            .play_overlay_state
+            .should_publish(config.websocket_update_rate, Instant::now())
+        {
             return;
         }
         let scene_snapshot = self.scene_snapshot();
         let pressed_play_inputs =
             self.input.pressed_play_inputs.iter().cloned().collect::<Vec<_>>();
         let payload = self.integrations.play_overlay_state.build_payload(
-            &self.boot.profile_config.play_overlay,
+            config,
             &self.boot.profile_config.input,
             &scene_snapshot,
             &pressed_play_inputs,
