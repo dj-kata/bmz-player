@@ -168,6 +168,7 @@ impl PlayOverlayState {
         input_config: &ProfileInputConfig,
         scene: &'a AppSceneSnapshot,
         pressed_play_inputs: &[(DeviceId, PhysicalControl)],
+        daily_play_count: u64,
     ) -> PlayOverlayPayload<'a> {
         let active = self.observe_inputs(config, input_config, pressed_play_inputs);
         PlayOverlayPayload {
@@ -176,7 +177,7 @@ impl PlayOverlayState {
             enabled: config.websocket_enabled,
             controller_mode: controller_mode_label(config.controller_mode),
             release_display_mode: release_display_mode_label(config.release_display_mode),
-            summary: PlayOverlaySummary::from_scene(scene),
+            summary: PlayOverlaySummary::from_scene(scene, daily_play_count),
             lanes: overlay_lanes(config.controller_mode)
                 .iter()
                 .map(|&lane| PlayOverlayLanePayload {
@@ -308,13 +309,13 @@ pub struct PlayOverlaySummary<'a> {
     pub scene: &'static str,
     pub title: Cow<'a, str>,
     pub notes: u32,
-    pub play_count: u32,
+    pub play_count: u64,
     pub ex_score: Option<u32>,
     pub score_rate: Option<f32>,
 }
 
 impl<'a> PlayOverlaySummary<'a> {
-    fn from_scene(scene: &'a AppSceneSnapshot) -> Self {
+    fn from_scene(scene: &'a AppSceneSnapshot, daily_play_count: u64) -> Self {
         match scene {
             AppSceneSnapshot::Select(snapshot) => {
                 let row = snapshot
@@ -322,21 +323,14 @@ impl<'a> PlayOverlaySummary<'a> {
                     .iter()
                     .find(|row| row.index == snapshot.selected_index)
                     .or_else(|| snapshot.rows.first());
-                let (title, notes, play_count, ex_score) = row
-                    .map(|row| {
-                        (
-                            Cow::Borrowed(row.title.as_str()),
-                            row.total_notes,
-                            row.play_count,
-                            row.ex_score,
-                        )
-                    })
-                    .unwrap_or_else(|| (Cow::Borrowed(""), 0, 0, None));
+                let (title, notes, ex_score) = row
+                    .map(|row| (Cow::Borrowed(row.title.as_str()), row.total_notes, row.ex_score))
+                    .unwrap_or_else(|| (Cow::Borrowed(""), 0, None));
                 Self {
                     scene: "Select",
                     title,
                     notes,
-                    play_count,
+                    play_count: daily_play_count,
                     ex_score,
                     score_rate: score_rate(ex_score, notes),
                 }
@@ -345,7 +339,7 @@ impl<'a> PlayOverlaySummary<'a> {
                 scene: "Decide",
                 title: Cow::Borrowed(snapshot.title.as_str()),
                 notes: snapshot.total_notes,
-                play_count: 0,
+                play_count: daily_play_count,
                 ex_score: Some(snapshot.ex_score),
                 score_rate: score_rate(Some(snapshot.ex_score), snapshot.total_notes),
             },
@@ -353,7 +347,7 @@ impl<'a> PlayOverlaySummary<'a> {
                 scene: "Play",
                 title: Cow::Borrowed(snapshot.title.as_str()),
                 notes: snapshot.total_notes,
-                play_count: 0,
+                play_count: daily_play_count,
                 ex_score: Some(snapshot.ex_score),
                 score_rate: score_rate(Some(snapshot.ex_score), snapshot.total_notes),
             },
@@ -361,7 +355,7 @@ impl<'a> PlayOverlaySummary<'a> {
                 scene: "Result",
                 title: Cow::Borrowed(snapshot.title.as_str()),
                 notes: snapshot.total_notes,
-                play_count: 0,
+                play_count: daily_play_count,
                 ex_score: Some(snapshot.ex_score),
                 score_rate: Some(snapshot.ex_score_rate),
             },

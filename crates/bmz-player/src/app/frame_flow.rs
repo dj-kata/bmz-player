@@ -193,6 +193,7 @@ impl WinitApp {
             &self.boot.profile_config.input,
             &scene_snapshot,
             &pressed_play_inputs,
+            self.select.player_stats.daily.play_count,
         );
         self.integrations.play_overlay_controller.publish(&payload);
     }
